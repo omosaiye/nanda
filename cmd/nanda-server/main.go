@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -60,8 +61,14 @@ func readyzHandler(w http.ResponseWriter, _ *http.Request) {
 	writeStatus(w, "ready")
 }
 
+type statusResponse struct {
+	Status string `json:"status"`
+}
+
 func writeStatus(w http.ResponseWriter, status string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(`{"status":"` + status + `"}`))
+	if err := json.NewEncoder(w).Encode(statusResponse{Status: status}); err != nil {
+		slog.Error("write status response failed", "err", err)
+	}
 }

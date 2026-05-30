@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -39,14 +40,13 @@ func TestProbeHandlers(t *testing.T) {
 				t.Fatalf("content type = %q, want %q", contentType, "application/json")
 			}
 
-			var body struct {
-				Status string `json:"status"`
+			var compactBody bytes.Buffer
+			if err := json.Compact(&compactBody, response.Body.Bytes()); err != nil {
+				t.Fatalf("compact response JSON: %v", err)
 			}
-			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if body.Status != tt.wantStatus {
-				t.Fatalf("response status = %q, want %q", body.Status, tt.wantStatus)
+			wantBody := `{"status":"` + tt.wantStatus + `"}`
+			if compactBody.String() != wantBody {
+				t.Fatalf("response body = %q, want %q", compactBody.String(), wantBody)
 			}
 		})
 	}
