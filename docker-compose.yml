@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: nanda_postgres
+    environment:
+      POSTGRES_USER: nanda
+      POSTGRES_PASSWORD: nanda
+      POSTGRES_DB: nanda
+    ports:
+      - "5432:5432"
+    volumes:
+      - nanda_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nanda -d nanda"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  nanda_pgdata:
