@@ -1,0 +1,5 @@
+{
+  "go.testFlags": ["-v"],
+  "go.toolsManagement.autoUpdate": true,
+  "editor.formatOnSave": true
+}
