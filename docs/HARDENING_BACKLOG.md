@@ -13,11 +13,14 @@ Known hardening tasks for NANDA v0:
 7. Later: replace placeholder `credentialSet128` with real credential-set commitment.
 8. Add OpenTelemetry traces for registration, resolution, trust checks, and audit writes.
 9. Add Prometheus metrics for request counts, denial counts, audit append failures, and resolver latency.
-10. Add production operator authentication beyond the simple API token guardrail.
-11. Add W3C VC interoperability when v0 scope expands.
+10. Add stronger authentication and RBAC beyond the simple API token guardrail.
+11. Add W3C VC interoperability and canonicalization when v0 scope expands.
 12. Add DID resolution when v0 scope expands.
-13. Add stronger deployment hardening for production packaging and operations.
-14. Add richer audit search and export for operator workflows.
+13. Add VC Status Lists when v0 scope expands.
+14. Add private resolution path support when v0 scope expands.
+15. Add stronger deployment hardening for production packaging and operations.
+16. Add richer audit search and export for operator workflows.
+17. Add an admin revocation mutation endpoint with audit events.
 
 Completed:
 
@@ -28,7 +31,8 @@ Completed:
 - Added simple bearer-token API auth guardrail for registration and resolution.
 - Added production migration gating with `NANDA_AUTO_MIGRATE`.
 - Added PostgreSQL append-only trigger protection for `audit_events`.
-- Added minimal admin inspection API for agents, audit events, and revocation status.
-- Added pagination and simple filters for admin audit inspection.
+- Added admin inspection API for agents, audit events, and revocation status.
+- Added admin audit pagination and filtering by event type and decision.
 - Added monotonic sequence enforcement so stale `AgentAddr120` records cannot overwrite newer records.
 - Added resolver cache metadata based on L1 freshness and selected endpoint TTL.
+- Added expired L1 record rejection during resolution.
