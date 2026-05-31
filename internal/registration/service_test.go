@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/solai/nanda/internal/agentaddr"
+	"github.com/solai/nanda/internal/audit"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
 )
@@ -80,6 +81,54 @@ func TestServiceRegisterSuccess(t *testing.T) {
 	}
 	if resp.CredentialSet128 != hex.EncodeToString(wantCredentialSet[:]) {
 		t.Fatalf("response credential set = %q, want %x", resp.CredentialSet128, wantCredentialSet)
+	}
+}
+
+func TestServiceRegisterWritesAuditEvent(t *testing.T) {
+	_, privateKey := testKeyPair(t)
+	auditStore := audit.NewMemoryStore()
+	service, err := NewService(
+		&fakeFactsStore{pointer: facts.FactsPointer{Scheme: "fs", Path: "ab/cd/agent.facts"}},
+		&fakeIndexStore{},
+		privateKey,
+		WithAuditStore(auditStore),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	_, err = service.Register(context.Background(), RegisterRequest{
+		AgentID:    "Agent.Example",
+		TTLSeconds: 300,
+		Sequence:   1,
+		Facts:      json.RawMessage(`{"endpoint":"https://agent.example"}`),
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	events, err := auditStore.List(context.Background())
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("audit event count = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.EventType != audit.EventAgentRegistered {
+		t.Fatalf("event type = %q, want %q", event.EventType, audit.EventAgentRegistered)
+	}
+	if event.Decision != audit.DecisionAllowed {
+		t.Fatalf("decision = %q, want %q", event.Decision, audit.DecisionAllowed)
+	}
+	if event.AgentID != "agent.example" {
+		t.Fatalf("agent id = %q, want agent.example", event.AgentID)
+	}
+	if event.AgentHash == "" || event.EventHash == "" {
+		t.Fatalf("missing audit hashes: agentHash=%q eventHash=%q", event.AgentHash, event.EventHash)
+	}
+	if err := auditStore.VerifyHashChain(context.Background()); err != nil {
+		t.Fatalf("verify audit hash chain: %v", err)
 	}
 }
 

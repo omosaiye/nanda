@@ -11,6 +11,7 @@ import (
 
 	"github.com/solai/nanda/internal/agentaddr"
 	"github.com/solai/nanda/internal/agentfacts"
+	"github.com/solai/nanda/internal/audit"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
 	"github.com/solai/nanda/internal/trust"
@@ -57,6 +58,32 @@ func TestServiceResolveSuccess(t *testing.T) {
 	}
 }
 
+func TestServiceResolveSuccessWritesAuditEvent(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
+	auditStore := audit.NewMemoryStore()
+	service := newTestServiceWithOptions(t, publicKey, record, pointer, testFactsBytes(t, []agentfacts.Endpoint{
+		testEndpoint("static", agentfacts.EndpointTypeStatic),
+	}), WithAuditStore(auditStore))
+
+	if _, err := service.Resolve(context.Background(), ResolveRequest{AgentID: "Agent.Example"}); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	events := requireAuditEvents(t, auditStore, 1)
+	event := events[0]
+	if event.EventType != audit.EventResolveAllowed {
+		t.Fatalf("event type = %q, want %q", event.EventType, audit.EventResolveAllowed)
+	}
+	if event.Decision != audit.DecisionAllowed {
+		t.Fatalf("decision = %q, want %q", event.Decision, audit.DecisionAllowed)
+	}
+	if event.AgentID != "agent.example" {
+		t.Fatalf("agent id = %q, want agent.example", event.AgentID)
+	}
+}
+
 func TestServiceResolveRequiredCapabilityWithValidCredential(t *testing.T) {
 	publicKey, privateKey := testKeyPair(t)
 	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
@@ -100,6 +127,36 @@ func TestServiceResolveRequiredCapabilityWithUntrustedIssuerFails(t *testing.T) 
 	})
 	if !errors.Is(err, ErrTrustDenied) {
 		t.Fatalf("resolve error = %v, want trust denied", err)
+	}
+}
+
+func TestServiceResolveTrustDenialWritesAuditEvent(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	credential.Issuer = "did:example:untrusted"
+	signCredential(t, &credential, issuerPrivateKey)
+	auditStore := audit.NewMemoryStore()
+	service := newCredentialTestServiceWithOptions(t, publicKey, privateKey, []agentfacts.CapabilityCredential{credential}, issuerPublicKey, WithAuditStore(auditStore))
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{
+		AgentID:            "agent.example",
+		RequiredCapability: "chat",
+	})
+	if !errors.Is(err, ErrTrustDenied) {
+		t.Fatalf("resolve error = %v, want trust denied", err)
+	}
+
+	events := requireAuditEvents(t, auditStore, 1)
+	event := events[0]
+	if event.EventType != audit.EventTrustDenied {
+		t.Fatalf("event type = %q, want %q", event.EventType, audit.EventTrustDenied)
+	}
+	if event.Decision != audit.DecisionDenied {
+		t.Fatalf("decision = %q, want %q", event.Decision, audit.DecisionDenied)
+	}
+	if event.Reason == "" {
+		t.Fatal("trust denial audit event reason is empty")
 	}
 }
 
@@ -216,6 +273,34 @@ func TestServiceResolveBadSignatureFails(t *testing.T) {
 	_, err := service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
 	if !errors.Is(err, ErrVerification) {
 		t.Fatalf("resolve error = %v, want verification error", err)
+	}
+}
+
+func TestServiceResolveVerificationFailureWritesAuditEvent(t *testing.T) {
+	publicKey, _ := testKeyPair(t)
+	_, signingKey := testKeyPair(t)
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), signingKey)
+	auditStore := audit.NewMemoryStore()
+	service := newTestServiceWithOptions(t, publicKey, record, pointer, testFactsBytes(t, []agentfacts.Endpoint{
+		testEndpoint("static", agentfacts.EndpointTypeStatic),
+	}), WithAuditStore(auditStore))
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+	if !errors.Is(err, ErrVerification) {
+		t.Fatalf("resolve error = %v, want verification error", err)
+	}
+
+	events := requireAuditEvents(t, auditStore, 1)
+	event := events[0]
+	if event.EventType != audit.EventResolveDenied {
+		t.Fatalf("event type = %q, want %q", event.EventType, audit.EventResolveDenied)
+	}
+	if event.Decision != audit.DecisionDenied {
+		t.Fatalf("decision = %q, want %q", event.Decision, audit.DecisionDenied)
+	}
+	if event.Reason == "" {
+		t.Fatal("verification failure audit event reason is empty")
 	}
 }
 
@@ -372,10 +457,17 @@ func newTestServiceWithOptions(t *testing.T, publicKey ed25519.PublicKey, record
 func newCredentialTestService(t *testing.T, publicKey ed25519.PublicKey, privateKey ed25519.PrivateKey, credentials []agentfacts.CapabilityCredential, issuerPublicKey ed25519.PublicKey) *Service {
 	t.Helper()
 
+	return newCredentialTestServiceWithOptions(t, publicKey, privateKey, credentials, issuerPublicKey)
+}
+
+func newCredentialTestServiceWithOptions(t *testing.T, publicKey ed25519.PublicKey, privateKey ed25519.PrivateKey, credentials []agentfacts.CapabilityCredential, issuerPublicKey ed25519.PublicKey, opts ...Option) *Service {
+	t.Helper()
+
 	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
 	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
 	verifier := testTrustVerifier(t, issuerPublicKey)
-	return newTestServiceWithOptions(t, publicKey, record, pointer, testFactsBytesWithCredentials(t, credentials), WithTrustVerifier(verifier))
+	opts = append(opts, WithTrustVerifier(verifier))
+	return newTestServiceWithOptions(t, publicKey, record, pointer, testFactsBytesWithCredentials(t, credentials), opts...)
 }
 
 func testRecord(t *testing.T, agentID string, factsPtrHash [16]byte, privateKey ed25519.PrivateKey) agentaddr.AgentAddr120 {
@@ -503,4 +595,20 @@ func testKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 		t.Fatalf("generate key: %v", err)
 	}
 	return publicKey, privateKey
+}
+
+func requireAuditEvents(t *testing.T, store *audit.MemoryStore, want int) []audit.Event {
+	t.Helper()
+
+	events, err := store.List(context.Background())
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != want {
+		t.Fatalf("audit event count = %d, want %d", len(events), want)
+	}
+	if err := store.VerifyHashChain(context.Background()); err != nil {
+		t.Fatalf("verify audit hash chain: %v", err)
+	}
+	return events
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/solai/nanda/internal/agentaddr"
+	"github.com/solai/nanda/internal/audit"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
 )
@@ -44,6 +45,7 @@ type Service struct {
 	factsStore facts.FactsStore
 	indexStore index.LeanIndexStore
 	privateKey ed25519.PrivateKey
+	auditStore audit.Store
 }
 
 type RegisterRequest struct {
@@ -64,7 +66,15 @@ type RegisterResponse struct {
 	AgentAddrRecordBase64 string `json:"agentAddrRecordBase64"`
 }
 
-func NewService(factsStore facts.FactsStore, indexStore index.LeanIndexStore, privateKey ed25519.PrivateKey) (*Service, error) {
+type Option func(*Service)
+
+func WithAuditStore(store audit.Store) Option {
+	return func(s *Service) {
+		s.auditStore = store
+	}
+}
+
+func NewService(factsStore facts.FactsStore, indexStore index.LeanIndexStore, privateKey ed25519.PrivateKey, opts ...Option) (*Service, error) {
 	if factsStore == nil {
 		return nil, ErrMissingFactsStore
 	}
@@ -75,11 +85,16 @@ func NewService(factsStore facts.FactsStore, indexStore index.LeanIndexStore, pr
 		return nil, agentaddr.ErrInvalidPrivateKey
 	}
 
-	return &Service{
+	service := &Service{
 		factsStore: factsStore,
 		indexStore: indexStore,
 		privateKey: privateKey,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(service)
+	}
+
+	return service, nil
 }
 
 func (s *Service) Register(ctx context.Context, req RegisterRequest) (RegisterResponse, error) {
@@ -111,7 +126,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (RegisterRe
 		return RegisterResponse{}, fmt.Errorf("store agent address record: %w", err)
 	}
 
-	return RegisterResponse{
+	resp := RegisterResponse{
 		AgentID:               agentID,
 		FactsPointer:          pointer.String(),
 		FactsPtrHash128:       hex.EncodeToString(factsPtrHash128[:]),
@@ -119,7 +134,12 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (RegisterRe
 		Sequence:              req.Sequence,
 		TTLSeconds:            req.TTLSeconds,
 		AgentAddrRecordBase64: base64.StdEncoding.EncodeToString(record.Encode()),
-	}, nil
+	}
+	if err := s.auditRegistration(ctx, req, resp); err != nil {
+		return RegisterResponse{}, err
+	}
+
+	return resp, nil
 }
 
 func validateRegisterRequest(req RegisterRequest) (string, error) {
@@ -135,4 +155,43 @@ func validateRegisterRequest(req RegisterRequest) (string, error) {
 	}
 
 	return agentID, nil
+}
+
+func (s *Service) auditRegistration(ctx context.Context, req RegisterRequest, resp RegisterResponse) error {
+	if s.auditStore == nil {
+		return nil
+	}
+	agentHash, err := agentaddr.AgentIDHash(resp.AgentID)
+	if err != nil {
+		return err
+	}
+	payload, err := audit.Payload(map[string]any{
+		"request": map[string]any{
+			"agentId":    req.AgentID,
+			"ttlSeconds": req.TTLSeconds,
+			"flags":      req.Flags,
+			"sequence":   req.Sequence,
+		},
+		"result": map[string]any{
+			"agentId":          resp.AgentID,
+			"factsPointer":     resp.FactsPointer,
+			"factsPtrHash128":  resp.FactsPtrHash128,
+			"credentialSet128": resp.CredentialSet128,
+			"sequence":         resp.Sequence,
+			"ttlSeconds":       resp.TTLSeconds,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("build registration audit payload: %w", err)
+	}
+	if _, err := s.auditStore.Append(ctx, audit.EventInput{
+		EventType: audit.EventAgentRegistered,
+		AgentID:   resp.AgentID,
+		AgentHash: hex.EncodeToString(agentHash[:]),
+		Decision:  audit.DecisionAllowed,
+		EventJSON: payload,
+	}); err != nil {
+		return fmt.Errorf("append registration audit event: %w", err)
+	}
+	return nil
 }

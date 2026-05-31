@@ -10,6 +10,7 @@ import (
 
 	"github.com/solai/nanda/internal/agentaddr"
 	"github.com/solai/nanda/internal/agentfacts"
+	"github.com/solai/nanda/internal/audit"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
 )
@@ -87,6 +88,7 @@ type Service struct {
 	pointerResolver FactsPointerResolver
 	publicKey       ed25519.PublicKey
 	trustVerifier   TrustVerifier
+	auditStore      audit.Store
 	now             func() time.Time
 }
 
@@ -113,6 +115,12 @@ type ProofBundle struct {
 func WithTrustVerifier(verifier TrustVerifier) Option {
 	return func(s *Service) {
 		s.trustVerifier = verifier
+	}
+}
+
+func WithAuditStore(store audit.Store) Option {
+	return func(s *Service) {
+		s.auditStore = store
 	}
 }
 
@@ -147,67 +155,83 @@ func NewService(indexStore index.LeanIndexStore, factsStore facts.FactsStore, po
 func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse, error) {
 	agentID, err := agentaddr.NormalizeAgentID(req.AgentID)
 	if err != nil {
-		return ResolveResponse{}, ValidationError{Field: "agentId", Err: err}
+		resolveErr := ValidationError{Field: "agentId", Err: err}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, "", "", audit.EventResolveDenied, resolveErr)
 	}
 
 	agentHash, err := agentaddr.AgentIDHash(agentID)
 	if err != nil {
-		return ResolveResponse{}, ValidationError{Field: "agentId", Err: err}
+		resolveErr := ValidationError{Field: "agentId", Err: err}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, "", audit.EventResolveDenied, resolveErr)
 	}
+	agentHashHex := fmt.Sprintf("%x", agentHash[:])
 
 	indexedRecord, err := s.indexStore.Get(ctx, agentHash)
 	if errors.Is(err, index.ErrNotFound) {
-		return ResolveResponse{}, fmt.Errorf("%w: agent address record", ErrNotFound)
+		resolveErr := fmt.Errorf("%w: agent address record", ErrNotFound)
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 	if err != nil {
-		return ResolveResponse{}, fmt.Errorf("get agent address record: %w", err)
+		resolveErr := fmt.Errorf("get agent address record: %w", err)
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 
 	record := indexedRecord.Record
 	if err := record.Verify(s.publicKey); err != nil {
-		return ResolveResponse{}, VerificationError{Step: "agent address signature", Err: err}
+		resolveErr := VerificationError{Step: "agent address signature", Err: err}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 
 	payload := record.Payload()
 	if payload.AgentIDHash != agentHash {
-		return ResolveResponse{}, VerificationError{Step: "agent id hash", Err: errors.New("record hash does not match requested agent id")}
+		resolveErr := VerificationError{Step: "agent id hash", Err: errors.New("record hash does not match requested agent id")}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 
 	pointer, err := s.pointerResolver.ResolveFactsPointer(ctx, payload.FactsPtrHash128)
 	if errors.Is(err, facts.ErrNotFound) {
-		return ResolveResponse{}, fmt.Errorf("%w: agent facts pointer", ErrNotFound)
+		resolveErr := fmt.Errorf("%w: agent facts pointer", ErrNotFound)
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 	if err != nil {
-		return ResolveResponse{}, fmt.Errorf("resolve agent facts pointer: %w", err)
+		resolveErr := fmt.Errorf("resolve agent facts pointer: %w", err)
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 	if facts.PointerHash128(pointer) != payload.FactsPtrHash128 {
-		return ResolveResponse{}, VerificationError{Step: "agent facts pointer hash", Err: errors.New("pointer hash does not match agent address payload")}
+		resolveErr := VerificationError{Step: "agent facts pointer hash", Err: errors.New("pointer hash does not match agent address payload")}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 
 	factsBytes, err := s.factsStore.Get(ctx, pointer)
 	if errors.Is(err, facts.ErrNotFound) {
-		return ResolveResponse{}, fmt.Errorf("%w: agent facts", ErrNotFound)
+		resolveErr := fmt.Errorf("%w: agent facts", ErrNotFound)
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 	if err != nil {
-		return ResolveResponse{}, fmt.Errorf("get agent facts: %w", err)
+		resolveErr := fmt.Errorf("get agent facts: %w", err)
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 
 	var decodedFacts agentfacts.AgentFacts
 	if err := json.Unmarshal(factsBytes, &decodedFacts); err != nil {
-		return ResolveResponse{}, ValidationError{Field: "agentFacts", Err: fmt.Errorf("invalid JSON: %w", err)}
+		resolveErr := ValidationError{Field: "agentFacts", Err: fmt.Errorf("invalid JSON: %w", err)}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 	if err := agentfacts.Validate(decodedFacts, agentID, req.RequiredCapability, s.now()); err != nil {
-		return ResolveResponse{}, ValidationError{Field: "agentFacts", Err: err}
+		resolveErr := ValidationError{Field: "agentFacts", Err: err}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 
 	trustDecision := TrustDecisionUnverifiedV0
 	capabilityCredentialVerified := false
 	if req.RequiredCapability != "" {
 		if s.trustVerifier == nil {
-			return ResolveResponse{}, fmt.Errorf("%w: trust verifier is not configured", ErrTrustDenied)
+			resolveErr := fmt.Errorf("%w: trust verifier is not configured", ErrTrustDenied)
+			return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventTrustDenied, resolveErr)
 		}
 		if err := s.trustVerifier.VerifyCapability(decodedFacts.Credentials, agentID, req.RequiredCapability, s.now()); err != nil {
-			return ResolveResponse{}, fmt.Errorf("%w: %v", ErrTrustDenied, err)
+			resolveErr := fmt.Errorf("%w: %v", ErrTrustDenied, err)
+			return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventTrustDenied, resolveErr)
 		}
 		trustDecision = TrustDecisionVerifiedV0
 		capabilityCredentialVerified = true
@@ -215,10 +239,11 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 
 	endpoint, ok := selectEndpoint(decodedFacts)
 	if !ok {
-		return ResolveResponse{}, ValidationError{Field: "endpoints", Err: ErrNoEndpoint}
+		resolveErr := ValidationError{Field: "endpoints", Err: ErrNoEndpoint}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
 
-	return ResolveResponse{
+	resp := ResolveResponse{
 		AgentID:       agentID,
 		Endpoint:      endpoint,
 		TrustDecision: trustDecision,
@@ -229,7 +254,73 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 			CredentialStatus:              CredentialStatusNotImplemented,
 			CapabilityCredentialVerified:  capabilityCredentialVerified,
 		},
-	}, nil
+	}
+	if err := s.auditResolveSuccess(ctx, req, resp, agentHashHex); err != nil {
+		return ResolveResponse{}, err
+	}
+
+	return resp, nil
+}
+
+func (s *Service) auditResolveSuccess(ctx context.Context, req ResolveRequest, resp ResolveResponse, agentHash string) error {
+	if s.auditStore == nil {
+		return nil
+	}
+	payload, err := audit.Payload(map[string]any{
+		"request": map[string]any{
+			"agentId":            req.AgentID,
+			"requiredCapability": req.RequiredCapability,
+		},
+		"result": map[string]any{
+			"agentId":       resp.AgentID,
+			"endpointId":    resp.Endpoint.ID,
+			"endpointType":  resp.Endpoint.Type,
+			"trustDecision": resp.TrustDecision,
+			"proofBundle":   resp.ProofBundle,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("build resolve audit payload: %w", err)
+	}
+	if _, err := s.auditStore.Append(ctx, audit.EventInput{
+		EventType: audit.EventResolveAllowed,
+		AgentID:   resp.AgentID,
+		AgentHash: agentHash,
+		Decision:  audit.DecisionAllowed,
+		EventJSON: payload,
+	}); err != nil {
+		return fmt.Errorf("append resolve audit event: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) auditResolveFailure(ctx context.Context, req ResolveRequest, agentID string, agentHash string, eventType string, resolveErr error) error {
+	if s.auditStore == nil {
+		return resolveErr
+	}
+	payload, err := audit.Payload(map[string]any{
+		"request": map[string]any{
+			"agentId":            req.AgentID,
+			"requiredCapability": req.RequiredCapability,
+		},
+		"result": map[string]any{
+			"error": resolveErr.Error(),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("build resolve audit payload: %w", err)
+	}
+	if _, err := s.auditStore.Append(ctx, audit.EventInput{
+		EventType: eventType,
+		AgentID:   agentID,
+		AgentHash: agentHash,
+		Decision:  audit.DecisionDenied,
+		Reason:    resolveErr.Error(),
+		EventJSON: payload,
+	}); err != nil {
+		return fmt.Errorf("append resolve audit event: %w", err)
+	}
+	return resolveErr
 }
 
 func selectEndpoint(facts agentfacts.AgentFacts) (agentfacts.Endpoint, bool) {
