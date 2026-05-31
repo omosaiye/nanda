@@ -83,6 +83,7 @@ func TestResolveAgentHandlerValidationFailure(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
+	assertJSONError(t, rec, "resolve_validation_failed", "resolve validation failed: agentId: agent id is empty")
 }
 
 func TestResolveAgentHandlerNotFound(t *testing.T) {
@@ -98,6 +99,7 @@ func TestResolveAgentHandlerNotFound(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
+	assertJSONError(t, rec, "not_found", http.StatusText(http.StatusNotFound))
 }
 
 func TestResolveAgentHandlerTrustDenied(t *testing.T) {
@@ -114,6 +116,7 @@ func TestResolveAgentHandlerTrustDenied(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusForbidden, rec.Body.String())
 	}
+	assertJSONError(t, rec, "trust_denied", resolver.ErrTrustDenied.Error())
 }
 
 func TestResolveAgentHandlerRejectsNonPost(t *testing.T) {
@@ -126,6 +129,7 @@ func TestResolveAgentHandlerRejectsNonPost(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
+	assertJSONError(t, rec, "method_not_allowed", http.StatusText(http.StatusMethodNotAllowed))
 }
 
 func TestResolveAgentHandlerRejectsMalformedUnknownAndTrailingJSON(t *testing.T) {
@@ -150,6 +154,7 @@ func TestResolveAgentHandlerRejectsMalformedUnknownAndTrailingJSON(t *testing.T)
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
 			}
+			assertJSONError(t, rec, "invalid_resolve_request", "invalid resolve request")
 			if service.called {
 				t.Fatal("resolver service was called")
 			}
@@ -168,6 +173,22 @@ func TestResolveAgentHandlerInternalFailure(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	assertJSONError(t, rec, "internal_error", http.StatusText(http.StatusInternalServerError))
+}
+
+func TestResolveAgentHandlerSetsRequestIDHeader(t *testing.T) {
+	handler := ResolveAgentHandler(&fakeResolverService{})
+	req := httptest.NewRequest(http.MethodPost, "/v1/resolve", strings.NewReader(`{
+		"agentId": ""
+	}`))
+	req.Header.Set("X-Request-ID", "resolve-test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Request-ID"); got != "resolve-test" {
+		t.Fatalf("request id header = %q, want resolve-test", got)
 	}
 }
 

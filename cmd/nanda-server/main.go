@@ -152,7 +152,7 @@ func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
 	mux.HandleFunc("/readyz", readyzHandler)
 	mux.Handle("/v1/agents/register", api.RegisterAgentHandler(registrationService))
 	mux.Handle("/v1/resolve", api.ResolveAgentHandler(resolverService))
-	return mux, nil
+	return api.WithRequestID(mux), nil
 }
 
 func runLocalMigrations(ctx context.Context, db *sql.DB) error {

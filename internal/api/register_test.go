@@ -75,6 +75,7 @@ func TestRegisterAgentHandlerValidationFailure(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
+	assertJSONError(t, rec, "registration_validation_failed", "registration validation failed: agentId: agent id is empty")
 }
 
 func TestRegisterAgentHandlerRejectsTrailingJSON(t *testing.T) {
@@ -93,6 +94,7 @@ func TestRegisterAgentHandlerRejectsTrailingJSON(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
 	}
+	assertJSONError(t, rec, "invalid_registration_request", "invalid registration request")
 	if service.called {
 		t.Fatal("registration service was called")
 	}
@@ -108,6 +110,7 @@ func TestRegisterAgentHandlerRejectsNonPost(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
 	}
+	assertJSONError(t, rec, "method_not_allowed", http.StatusText(http.StatusMethodNotAllowed))
 }
 
 func TestRegisterAgentHandlerInternalFailure(t *testing.T) {
@@ -124,6 +127,24 @@ func TestRegisterAgentHandlerInternalFailure(t *testing.T) {
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+	assertJSONError(t, rec, "internal_error", http.StatusText(http.StatusInternalServerError))
+}
+
+func TestRegisterAgentHandlerSetsRequestIDHeader(t *testing.T) {
+	handler := RegisterAgentHandler(&fakeRegistrationService{})
+	req := httptest.NewRequest(http.MethodPost, "/v1/agents/register", strings.NewReader(`{
+		"ttlSeconds": 300,
+		"sequence": 7,
+		"facts": {}
+	}`))
+	req.Header.Set("X-Request-ID", "register-test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Request-ID"); got != "register-test" {
+		t.Fatalf("request id header = %q, want register-test", got)
 	}
 }
 
