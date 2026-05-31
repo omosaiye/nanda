@@ -44,6 +44,16 @@ go test -v ./...
 
 `make verify` delegates to this script.
 
+## GitHub Actions CI
+
+The CI workflow runs on pushes and pull requests to `main`. It uses the Go version declared in `go.mod`, checks formatting with `go fmt ./...` followed by `git diff --exit-code`, and runs `go test ./...`.
+
+CI also includes a separate PostgreSQL-backed integration job with a local service container using:
+
+```sh
+NANDA_POSTGRES_DSN='postgres://nanda:nanda@localhost:5432/nanda?sslmode=disable' go test -v ./...
+```
+
 ## Persistent Docker State
 
 `docker compose down` stops the local database but keeps the named volume. Persistent state can affect manual demos because records, audit events, and revocation rows remain. For a fully clean local database, remove the compose volume after stopping Postgres:

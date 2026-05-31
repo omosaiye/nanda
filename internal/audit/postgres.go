@@ -43,7 +43,7 @@ func (s *PostgresStore) Append(ctx context.Context, input EventInput) (Event, er
 		return Event{}, fmt.Errorf("get previous audit event hash: %w", err)
 	}
 
-	event, err := NewEvent(previousHash, input, time.Now())
+	event, err := NewEvent(previousHash, input, time.Now().UTC().Truncate(time.Microsecond))
 	if err != nil {
 		return Event{}, err
 	}
@@ -211,7 +211,11 @@ func scanEvent(scanner eventScanner) (Event, error) {
 	event.ActorHash = actorHash.String
 	event.Reason = reason.String
 	event.PreviousHash = previousHash.String
-	event.EventJSON = append([]byte(nil), eventJSON...)
+	canonicalEventJSON, err := CanonicalJSON(eventJSON)
+	if err != nil {
+		return Event{}, err
+	}
+	event.EventJSON = append([]byte(nil), canonicalEventJSON...)
 	return event, nil
 }
 

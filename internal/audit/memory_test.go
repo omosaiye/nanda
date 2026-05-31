@@ -89,6 +89,34 @@ func TestMemoryStoreVerifyHashChainDetectsTampering(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreHashVerificationSurvivesNonCanonicalEventJSON(t *testing.T) {
+	store := NewMemoryStore()
+	store.now = fixedNow
+	ctx := context.Background()
+
+	event, err := store.Append(ctx, EventInput{
+		EventType: EventAgentRegistered,
+		AgentID:   "agent.example",
+		AgentHash: "abc123",
+		Decision:  DecisionAllowed,
+		EventJSON: json.RawMessage(`{"b":2,"a":1}`),
+	})
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if string(event.EventJSON) != `{"a":1,"b":2}` {
+		t.Fatalf("event JSON = %s, want canonical JSON", event.EventJSON)
+	}
+	if err := store.VerifyHashChain(ctx); err != nil {
+		t.Fatalf("verify canonical hash chain: %v", err)
+	}
+
+	store.events[0].EventJSON = json.RawMessage(`{"b":2,"a":1}`)
+	if err := store.VerifyHashChain(ctx); err != nil {
+		t.Fatalf("verify hash chain with non-canonical stored JSON: %v", err)
+	}
+}
+
 func TestMemoryStoreQueryDefaultPagination(t *testing.T) {
 	store := NewMemoryStore()
 	ctx := context.Background()

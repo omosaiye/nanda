@@ -37,15 +37,23 @@ func TestPostgresAuditStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new postgres store: %v", err)
 	}
+	firstEventJSON := json.RawMessage(`{"z":3,"request":{"agentId":"agent.example"},"a":1,"result":{"agentId":"agent.example"}}`)
 	first, err := store.Append(ctx, EventInput{
 		EventType: EventAgentRegistered,
 		AgentID:   "agent.example",
 		AgentHash: "abc123",
 		Decision:  DecisionAllowed,
-		EventJSON: json.RawMessage(`{"request":{"agentId":"agent.example"},"result":{"agentId":"agent.example"}}`),
+		EventJSON: firstEventJSON,
 	})
 	if err != nil {
 		t.Fatalf("append first: %v", err)
+	}
+	wantFirstEventJSON, err := CanonicalJSON(firstEventJSON)
+	if err != nil {
+		t.Fatalf("canonical first event JSON: %v", err)
+	}
+	if string(first.EventJSON) != string(wantFirstEventJSON) {
+		t.Fatalf("first event JSON = %s, want %s", first.EventJSON, wantFirstEventJSON)
 	}
 	second, err := store.Append(ctx, EventInput{
 		EventType: EventResolveDenied,
@@ -53,7 +61,7 @@ func TestPostgresAuditStore(t *testing.T) {
 		AgentHash: "abc123",
 		Decision:  DecisionDenied,
 		Reason:    "not found",
-		EventJSON: json.RawMessage(`{"request":{"agentId":"agent.example"},"result":{"error":"not found"}}`),
+		EventJSON: json.RawMessage(`{"z":3,"request":{"agentId":"agent.example"},"a":1,"result":{"error":"not found"}}`),
 	})
 	if err != nil {
 		t.Fatalf("append second: %v", err)
@@ -71,6 +79,9 @@ func TestPostgresAuditStore(t *testing.T) {
 	}
 	if len(events) != 2 {
 		t.Fatalf("event count = %d, want 2", len(events))
+	}
+	if string(events[0].EventJSON) != string(wantFirstEventJSON) {
+		t.Fatalf("scanned event JSON = %s, want %s", events[0].EventJSON, wantFirstEventJSON)
 	}
 
 	page, err := store.Query(ctx, Query{AgentID: "agent.example", Limit: 1, Offset: 1})

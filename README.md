@@ -1,5 +1,7 @@
 # NANDA
 
+[![CI](https://github.com/solai/nanda/actions/workflows/ci.yml/badge.svg)](https://github.com/solai/nanda/actions/workflows/ci.yml)
+
 NANDA is a local prototype of a DNS-like registry and resolver for AI agents. It gives an agent a compact L1 address record, stores richer L2 metadata separately, and resolves the current endpoint with verification checks before returning it. The L1 record is `AgentAddr120`, a signed 120-byte anchor that binds the agent ID hash, AgentFacts pointer hash, credential-set hash, TTL, flags, and sequence. The L2 `AgentFacts` document is stored on the local filesystem, while Postgres stores the L1 index, facts pointer mapping, audit events, and revocation records. The registration API writes AgentFacts, creates and signs the L1 record, indexes it, and emits an audit event. The resolver API verifies the signed L1 record, checks the L1-to-L2 binding, validates AgentFacts, applies trust and revocation checks when a capability is required, and emits an audit event. v0.1 is intentionally local-first and does not include distributed identity, private resolution paths, production authorization, or deployment automation.
 
 ## v0.1 Scope
@@ -43,6 +45,13 @@ scripts/demo-local.sh
 ```
 
 The demo script checks health and readiness, registers `docs/examples/register-agent.json`, resolves `docs/examples/resolve-agent.json`, calls admin inspection endpoints, and exits non-zero on failure.
+
+## Development Workflow
+
+- Branch from `main`.
+- Run `make verify` before opening a pull request.
+- Open a pull request to `main`.
+- CI must pass before merge.
 
 ## Manual Curl Examples
 
