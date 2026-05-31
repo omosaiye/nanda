@@ -13,14 +13,23 @@ import (
 const (
 	defaultAddr     = ":8080"
 	defaultFactsDir = "./var/facts"
+
+	ModeLocal      = "local"
+	ModeProduction = "production"
 )
 
-var ErrInvalidKeyConfig = errors.New("invalid key configuration")
+var (
+	ErrInvalidKeyConfig = errors.New("invalid key configuration")
+	ErrInvalidMode      = errors.New("invalid runtime mode")
+)
 
 type Local struct {
 	Addr         string
+	Mode         string
 	PostgresDSN  string
 	FactsDir     string
+	APIToken     string
+	AutoMigrate  bool
 	PrivateKey   ed25519.PrivateKey
 	PublicKey    ed25519.PublicKey
 	EphemeralKey bool
@@ -31,13 +40,26 @@ func LoadLocalFromEnv() (Local, error) {
 }
 
 func LoadLocal(lookup func(string) string) (Local, error) {
-	cfg := Local{
-		Addr:        valueOrDefault(lookup("NANDA_ADDR"), defaultAddr),
-		PostgresDSN: lookup("NANDA_POSTGRES_DSN"),
-		FactsDir:    valueOrDefault(lookup("NANDA_FACTS_DIR"), defaultFactsDir),
+	mode := valueOrDefault(lookup("NANDA_MODE"), ModeLocal)
+	if mode != ModeLocal && mode != ModeProduction {
+		return Local{}, fmt.Errorf("%w: NANDA_MODE must be local or production", ErrInvalidMode)
 	}
 
-	privateKey, generated, err := loadPrivateKey(lookup("NANDA_PRIVATE_KEY_BASE64"))
+	privateKeyEncoded := lookup("NANDA_PRIVATE_KEY_BASE64")
+	if mode == ModeProduction && privateKeyEncoded == "" {
+		return Local{}, errors.New("NANDA_PRIVATE_KEY_BASE64 is required in production mode")
+	}
+
+	cfg := Local{
+		Addr:        valueOrDefault(lookup("NANDA_ADDR"), defaultAddr),
+		Mode:        mode,
+		PostgresDSN: lookup("NANDA_POSTGRES_DSN"),
+		FactsDir:    valueOrDefault(lookup("NANDA_FACTS_DIR"), defaultFactsDir),
+		APIToken:    lookup("NANDA_API_TOKEN"),
+		AutoMigrate: shouldAutoMigrate(mode, lookup("NANDA_AUTO_MIGRATE")),
+	}
+
+	privateKey, generated, err := loadPrivateKey(privateKeyEncoded)
 	if err != nil {
 		return Local{}, err
 	}
@@ -53,9 +75,23 @@ func LoadLocal(lookup func(string) string) (Local, error) {
 	return cfg, nil
 }
 
-func RequirePostgresDSN(cfg Local) error {
+func ValidateRuntime(cfg Local) error {
+	if cfg.Mode != ModeLocal && cfg.Mode != ModeProduction {
+		return fmt.Errorf("%w: NANDA_MODE must be local or production", ErrInvalidMode)
+	}
 	if cfg.PostgresDSN == "" {
-		return errors.New("NANDA_POSTGRES_DSN is required for local server mode")
+		return errors.New("NANDA_POSTGRES_DSN is required")
+	}
+	if cfg.Mode == ModeProduction {
+		if len(cfg.PrivateKey) != ed25519.PrivateKeySize {
+			return errors.New("NANDA_PRIVATE_KEY_BASE64 is required in production mode")
+		}
+		if cfg.EphemeralKey {
+			return errors.New("ephemeral signing keys are forbidden in production mode")
+		}
+		if cfg.APIToken == "" {
+			return errors.New("NANDA_API_TOKEN is required in production mode")
+		}
 	}
 	return nil
 }
@@ -106,6 +142,13 @@ func valueOrDefault(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func shouldAutoMigrate(mode string, value string) bool {
+	if mode == ModeLocal {
+		return value != "false"
+	}
+	return value == "true"
 }
 
 func getenv(key string) string {

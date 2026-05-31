@@ -39,7 +39,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := config.RequirePostgresDSN(cfg); err != nil {
+	if err := config.ValidateRuntime(cfg); err != nil {
 		return err
 	}
 
@@ -52,8 +52,10 @@ func run(ctx context.Context) error {
 	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping postgres: %w", err)
 	}
-	if err := runLocalMigrations(ctx, db); err != nil {
-		return err
+	if cfg.AutoMigrate {
+		if err := runMigrations(ctx, db); err != nil {
+			return err
+		}
 	}
 
 	handler, err := newLocalHandler(cfg, db)
@@ -72,7 +74,7 @@ func run(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("starting nanda server", "addr", cfg.Addr, "factsDir", cfg.FactsDir)
+		slog.Info("starting nanda server", "addr", cfg.Addr, "mode", cfg.Mode, "factsDir", cfg.FactsDir)
 		errCh <- server.ListenAndServe()
 	}()
 
@@ -148,14 +150,20 @@ func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", healthzHandler)
-	mux.HandleFunc("/readyz", readyzHandler)
-	mux.Handle("/v1/agents/register", api.RegisterAgentHandler(registrationService))
-	mux.Handle("/v1/resolve", api.ResolveAgentHandler(resolverService))
+	registerHandler := api.RegisterAgentHandler(registrationService)
+	resolveHandler := api.ResolveAgentHandler(resolverService)
+	addRoutes(mux, registerHandler, resolveHandler, cfg.APIToken)
 	return api.WithRequestID(mux), nil
 }
 
-func runLocalMigrations(ctx context.Context, db *sql.DB) error {
+func addRoutes(mux *http.ServeMux, registerHandler http.Handler, resolveHandler http.Handler, apiToken string) {
+	mux.HandleFunc("/healthz", healthzHandler)
+	mux.HandleFunc("/readyz", readyzHandler)
+	mux.Handle("/v1/agents/register", api.WithBearerAuth(registerHandler, apiToken))
+	mux.Handle("/v1/resolve", api.WithBearerAuth(resolveHandler, apiToken))
+}
+
+func runMigrations(ctx context.Context, db *sql.DB) error {
 	migrationsDir, err := findMigrationsDir()
 	if err != nil {
 		return err

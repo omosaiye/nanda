@@ -34,7 +34,7 @@ func TestLocalServerRegisterResolveEndToEnd(t *testing.T) {
 	if err := db.PingContext(ctx); err != nil {
 		t.Fatalf("ping postgres: %v", err)
 	}
-	if err := runLocalMigrations(ctx, db); err != nil {
+	if err := runMigrations(ctx, db); err != nil {
 		t.Fatalf("run migrations: %v", err)
 	}
 	cleanLocalTables(t, db)

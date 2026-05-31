@@ -1,6 +1,6 @@
 LOCAL_POSTGRES_DSN ?= postgres://nanda:nanda@localhost:5432/nanda?sslmode=disable
 
-.PHONY: test test-integration run-local run docker-up docker-down fmt tidy verify
+.PHONY: test test-integration run-local run docker-up docker-down fmt tidy verify verify-script
 
 test:
 	go test ./...
@@ -26,4 +26,7 @@ fmt:
 tidy:
 	go mod tidy
 
-verify: fmt test
+verify: verify-script
+
+verify-script:
+	./scripts/verify.sh

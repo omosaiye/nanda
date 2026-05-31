@@ -74,8 +74,70 @@ func TestPostgresAuditStore(t *testing.T) {
 	}
 }
 
+func TestPostgresAuditEventsAppendOnlyGuardrail(t *testing.T) {
+	dsn := os.Getenv("NANDA_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("set NANDA_POSTGRES_DSN to run PostgreSQL integration tests")
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatalf("open postgres: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatalf("ping postgres: %v", err)
+	}
+	if err := applyAuditTestSchema(ctx, db); err != nil {
+		t.Fatalf("apply test schema: %v", err)
+	}
+	if err := applyAuditAppendOnlyMigration(ctx, db); err != nil {
+		t.Fatalf("apply append-only migration: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DROP TABLE IF EXISTS audit_events")
+		_, _ = db.ExecContext(context.Background(), "DROP FUNCTION IF EXISTS prevent_audit_events_mutation()")
+	})
+
+	store, err := NewPostgresStore(db)
+	if err != nil {
+		t.Fatalf("new postgres store: %v", err)
+	}
+	event, err := store.Append(ctx, EventInput{
+		EventType: EventAgentRegistered,
+		AgentID:   "agent.example",
+		AgentHash: "abc123",
+		Decision:  DecisionAllowed,
+		EventJSON: json.RawMessage(`{"request":{"agentId":"agent.example"},"result":{"agentId":"agent.example"}}`),
+	})
+	if err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+
+	if _, err := db.ExecContext(ctx, `UPDATE audit_events SET reason = 'changed' WHERE event_id = $1`, event.EventID); err == nil {
+		t.Fatal("update audit_events succeeded; want append-only trigger failure")
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM audit_events WHERE event_id = $1`, event.EventID); err == nil {
+		t.Fatal("delete audit_events succeeded; want append-only trigger failure")
+	}
+}
+
 func applyAuditTestSchema(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS audit_events"); err != nil {
+		return err
+	}
 	schema, err := os.ReadFile("../../migrations/002_audit_events.sql")
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, string(schema))
+	return err
+}
+
+func applyAuditAppendOnlyMigration(ctx context.Context, db *sql.DB) error {
+	schema, err := os.ReadFile("../../migrations/005_audit_events_append_only.sql")
 	if err != nil {
 		return err
 	}
