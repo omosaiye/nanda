@@ -84,6 +84,39 @@ func TestServiceRegisterSuccess(t *testing.T) {
 	}
 }
 
+func TestServiceRegisterStoresFactsPointerWhenConfigured(t *testing.T) {
+	_, privateKey := testKeyPair(t)
+	pointerStore := &fakePointerStore{}
+	factsStore := &fakeFactsStore{
+		pointer: facts.FactsPointer{Scheme: "fs", Path: "ab/cd/agent.facts"},
+	}
+	service, err := NewService(
+		factsStore,
+		&fakeIndexStore{},
+		privateKey,
+		WithPointerStore(pointerStore),
+	)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	_, err = service.Register(context.Background(), RegisterRequest{
+		AgentID:    "agent.example",
+		TTLSeconds: 300,
+		Sequence:   1,
+		Facts:      json.RawMessage(`{"endpoint":"https://agent.example"}`),
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	if !pointerStore.putCalled {
+		t.Fatal("pointer store PutFactsPointer was not called")
+	}
+	if pointerStore.pointer != factsStore.pointer {
+		t.Fatalf("stored pointer = %+v, want %+v", pointerStore.pointer, factsStore.pointer)
+	}
+}
+
 func TestServiceRegisterWritesAuditEvent(t *testing.T) {
 	_, privateKey := testKeyPair(t)
 	auditStore := audit.NewMemoryStore()
@@ -202,6 +235,21 @@ func (s *fakeIndexStore) Get(_ context.Context, _ [16]byte) (index.IndexedRecord
 
 func (s *fakeIndexStore) History(_ context.Context, _ [16]byte) ([]index.IndexedRecord, error) {
 	return nil, nil
+}
+
+type fakePointerStore struct {
+	putCalled bool
+	pointer   facts.FactsPointer
+}
+
+func (s *fakePointerStore) PutFactsPointer(_ context.Context, pointer facts.FactsPointer) error {
+	s.putCalled = true
+	s.pointer = pointer
+	return nil
+}
+
+func (s *fakePointerStore) ResolveFactsPointer(_ context.Context, _ [16]byte) (facts.FactsPointer, error) {
+	return facts.FactsPointer{}, facts.ErrNotFound
 }
 
 func newTestService(t *testing.T, factsStore facts.FactsStore, indexStore index.LeanIndexStore, privateKey ed25519.PrivateKey) *Service {

@@ -42,10 +42,11 @@ func (e ValidationError) Is(target error) bool {
 }
 
 type Service struct {
-	factsStore facts.FactsStore
-	indexStore index.LeanIndexStore
-	privateKey ed25519.PrivateKey
-	auditStore audit.Store
+	factsStore   facts.FactsStore
+	pointerStore facts.PointerStore
+	indexStore   index.LeanIndexStore
+	privateKey   ed25519.PrivateKey
+	auditStore   audit.Store
 }
 
 type RegisterRequest struct {
@@ -71,6 +72,12 @@ type Option func(*Service)
 func WithAuditStore(store audit.Store) Option {
 	return func(s *Service) {
 		s.auditStore = store
+	}
+}
+
+func WithPointerStore(store facts.PointerStore) Option {
+	return func(s *Service) {
+		s.pointerStore = store
 	}
 }
 
@@ -106,6 +113,11 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (RegisterRe
 	pointer, err := s.factsStore.Put(ctx, []byte(req.Facts))
 	if err != nil {
 		return RegisterResponse{}, fmt.Errorf("store agent facts: %w", err)
+	}
+	if s.pointerStore != nil {
+		if err := s.pointerStore.PutFactsPointer(ctx, pointer); err != nil {
+			return RegisterResponse{}, fmt.Errorf("store agent facts pointer: %w", err)
+		}
 	}
 
 	factsPtrHash128 := facts.PointerHash128(pointer)

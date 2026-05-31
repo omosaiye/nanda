@@ -1,0 +1,22 @@
+{
+  "agentId": "agent.example",
+  "ttlSeconds": 300,
+  "sequence": 1,
+  "facts": {
+    "schemaVersion": "nanda.agentfacts.v0",
+    "id": "agent.example",
+    "controller": "did:example:controller",
+    "validFrom": "2026-01-01T00:00:00Z",
+    "validUntil": "2030-01-01T00:00:00Z",
+    "capabilities": ["chat"],
+    "endpoints": [
+      {
+        "id": "primary",
+        "type": "static",
+        "url": "https://agent.example/api",
+        "protocol": "https",
+        "ttlSeconds": 60
+      }
+    ]
+  }
+}
