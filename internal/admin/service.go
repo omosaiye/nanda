@@ -113,24 +113,31 @@ func (s *Service) GetAgent(ctx context.Context, agentID string) (AgentResponse, 
 	}, nil
 }
 
-func (s *Service) ListAudit(ctx context.Context) ([]audit.Event, error) {
-	events, err := s.auditStore.List(ctx)
+func (s *Service) ListAudit(ctx context.Context, query audit.Query) (audit.ListResult, error) {
+	result, err := s.auditStore.Query(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("list audit events: %w", err)
+		if errors.Is(err, audit.ErrInvalidQuery) {
+			return audit.ListResult{}, ValidationError{Err: err}
+		}
+		return audit.ListResult{}, fmt.Errorf("list audit events: %w", err)
 	}
-	return events, nil
+	return result, nil
 }
 
-func (s *Service) ListAuditByAgent(ctx context.Context, agentID string) ([]audit.Event, error) {
+func (s *Service) ListAuditByAgent(ctx context.Context, agentID string, query audit.Query) (audit.ListResult, error) {
 	normalizedAgentID, err := agentaddr.NormalizeAgentID(agentID)
 	if err != nil {
-		return nil, ValidationError{Field: "agentId", Err: err}
+		return audit.ListResult{}, ValidationError{Field: "agentId", Err: err}
 	}
-	events, err := s.auditStore.ListByAgent(ctx, normalizedAgentID)
+	query.AgentID = normalizedAgentID
+	result, err := s.auditStore.Query(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("list audit events by agent: %w", err)
+		if errors.Is(err, audit.ErrInvalidQuery) {
+			return audit.ListResult{}, ValidationError{Err: err}
+		}
+		return audit.ListResult{}, fmt.Errorf("list audit events by agent: %w", err)
 	}
-	return events, nil
+	return result, nil
 }
 
 func (s *Service) GetRevocationStatus(ctx context.Context, issuer string, credentialID string) (RevocationStatusResponse, error) {

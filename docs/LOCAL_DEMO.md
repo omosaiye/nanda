@@ -93,18 +93,18 @@ curl -sS http://localhost:8080/v1/admin/agents/agent.example \
   -H 'X-Request-ID: demo-admin-agent'
 ```
 
-List audit events:
+List audit events with pagination:
 
 ```sh
-curl -sS http://localhost:8080/v1/admin/audit \
+curl -sS 'http://localhost:8080/v1/admin/audit?limit=100&offset=0' \
   "${TOKEN_HEADER[@]}" \
   -H 'X-Request-ID: demo-admin-audit'
 ```
 
-List audit events for one agent:
+List denied resolve audit events for one agent:
 
 ```sh
-curl -sS http://localhost:8080/v1/admin/audit/agent.example \
+curl -sS 'http://localhost:8080/v1/admin/audit/agent.example?limit=50&offset=0&eventType=resolve.denied&decision=denied' \
   "${TOKEN_HEADER[@]}" \
   -H 'X-Request-ID: demo-admin-audit-agent'
 ```

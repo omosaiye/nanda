@@ -21,11 +21,15 @@ const (
 
 	DecisionAllowed = "allowed"
 	DecisionDenied  = "denied"
+
+	DefaultListLimit = 100
+	MaxListLimit     = 500
 )
 
 var (
 	ErrInvalidEventInput = errors.New("invalid audit event input")
 	ErrHashChainInvalid  = errors.New("audit hash chain invalid")
+	ErrInvalidQuery      = errors.New("invalid audit query")
 )
 
 type Event struct {
@@ -52,11 +56,49 @@ type EventInput struct {
 	EventJSON json.RawMessage `json:"eventJSON"`
 }
 
+type Query struct {
+	AgentID   string
+	EventType string
+	Decision  string
+	Limit     int
+	Offset    int
+}
+
+type ListResult struct {
+	Items  []Event `json:"items"`
+	Limit  int     `json:"limit"`
+	Offset int     `json:"offset"`
+	Count  int     `json:"count"`
+}
+
 type Store interface {
 	Append(ctx context.Context, input EventInput) (Event, error)
 	List(ctx context.Context) ([]Event, error)
 	ListByAgent(ctx context.Context, agentID string) ([]Event, error)
+	Query(ctx context.Context, query Query) (ListResult, error)
 	VerifyHashChain(ctx context.Context) error
+}
+
+func NormalizeQuery(query Query) (Query, error) {
+	if query.Limit == 0 {
+		query.Limit = DefaultListLimit
+	}
+	if query.Limit < 0 {
+		return Query{}, fmt.Errorf("%w: limit must be positive", ErrInvalidQuery)
+	}
+	if query.Limit > MaxListLimit {
+		return Query{}, fmt.Errorf("%w: limit must be at most %d", ErrInvalidQuery, MaxListLimit)
+	}
+	if query.Offset < 0 {
+		return Query{}, fmt.Errorf("%w: offset must be non-negative", ErrInvalidQuery)
+	}
+	if query.EventType != "" && !supportedEventType(query.EventType) {
+		return Query{}, fmt.Errorf("%w: unsupported event type %q", ErrInvalidQuery, query.EventType)
+	}
+	if query.Decision != "" && !supportedDecision(query.Decision) {
+		return Query{}, fmt.Errorf("%w: unsupported decision %q", ErrInvalidQuery, query.Decision)
+	}
+	return query, nil
 }
 
 func NewEvent(previousHash string, input EventInput, createdAt time.Time) (Event, error) {
@@ -133,20 +175,34 @@ func Payload(data any) (json.RawMessage, error) {
 }
 
 func validateInput(input EventInput) error {
-	switch input.EventType {
-	case EventAgentRegistered, EventResolveAllowed, EventResolveDenied, EventTrustDenied:
-	default:
+	if !supportedEventType(input.EventType) {
 		return fmt.Errorf("%w: unsupported event type %q", ErrInvalidEventInput, input.EventType)
 	}
-	switch input.Decision {
-	case DecisionAllowed, DecisionDenied:
-	default:
+	if !supportedDecision(input.Decision) {
 		return fmt.Errorf("%w: unsupported decision %q", ErrInvalidEventInput, input.Decision)
 	}
 	if input.EventJSON != nil && !json.Valid(input.EventJSON) {
 		return fmt.Errorf("%w: eventJSON must be valid JSON", ErrInvalidEventInput)
 	}
 	return nil
+}
+
+func supportedEventType(eventType string) bool {
+	switch eventType {
+	case EventAgentRegistered, EventResolveAllowed, EventResolveDenied, EventTrustDenied:
+		return true
+	default:
+		return false
+	}
+}
+
+func supportedDecision(decision string) bool {
+	switch decision {
+	case DecisionAllowed, DecisionDenied:
+		return true
+	default:
+		return false
+	}
 }
 
 type eventHashPayload struct {

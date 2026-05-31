@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/solai/nanda/internal/admin"
 	"github.com/solai/nanda/internal/audit"
@@ -13,8 +14,8 @@ import (
 
 type AdminService interface {
 	GetAgent(ctx context.Context, agentID string) (admin.AgentResponse, error)
-	ListAudit(ctx context.Context) ([]audit.Event, error)
-	ListAuditByAgent(ctx context.Context, agentID string) ([]audit.Event, error)
+	ListAudit(ctx context.Context, query audit.Query) (audit.ListResult, error)
+	ListAuditByAgent(ctx context.Context, agentID string, query audit.Query) (audit.ListResult, error)
 	GetRevocationStatus(ctx context.Context, issuer string, credentialID string) (admin.RevocationStatusResponse, error)
 }
 
@@ -45,12 +46,17 @@ func AdminListAuditHandler(service AdminService) http.Handler {
 			return
 		}
 
-		events, err := service.ListAudit(r.Context())
+		query, err := parseAuditQuery(r)
 		if err != nil {
 			writeAdminError(w, r, err)
 			return
 		}
-		writeJSON(w, r, events)
+		result, err := service.ListAudit(r.Context(), query)
+		if err != nil {
+			writeAdminError(w, r, err)
+			return
+		}
+		writeJSON(w, r, result)
 	})
 }
 
@@ -63,12 +69,17 @@ func AdminListAuditByAgentHandler(service AdminService) http.Handler {
 			return
 		}
 
-		events, err := service.ListAuditByAgent(r.Context(), r.PathValue("agentId"))
+		query, err := parseAuditQuery(r)
 		if err != nil {
 			writeAdminError(w, r, err)
 			return
 		}
-		writeJSON(w, r, events)
+		result, err := service.ListAuditByAgent(r.Context(), r.PathValue("agentId"), query)
+		if err != nil {
+			writeAdminError(w, r, err)
+			return
+		}
+		writeJSON(w, r, result)
 	})
 }
 
@@ -101,6 +112,32 @@ func writeAdminError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	slog.Error("admin request failed", "err", err, "request_id", RequestID(r))
 	WriteJSONError(w, r, http.StatusInternalServerError, "internal_error", http.StatusText(http.StatusInternalServerError))
+}
+
+func parseAuditQuery(r *http.Request) (audit.Query, error) {
+	values := r.URL.Query()
+	query := audit.Query{
+		EventType: values.Get("eventType"),
+		Decision:  values.Get("decision"),
+	}
+	if raw := values.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit <= 0 {
+			return audit.Query{}, admin.ValidationError{Field: "limit", Err: errors.New("limit must be a positive integer")}
+		}
+		query.Limit = limit
+	}
+	if raw := values.Get("offset"); raw != "" {
+		offset, err := strconv.Atoi(raw)
+		if err != nil || offset < 0 {
+			return audit.Query{}, admin.ValidationError{Field: "offset", Err: errors.New("offset must be a non-negative integer")}
+		}
+		query.Offset = offset
+	}
+	if _, err := audit.NormalizeQuery(query); err != nil {
+		return audit.Query{}, admin.ValidationError{Err: err}
+	}
+	return query, nil
 }
 
 func writeJSON(w http.ResponseWriter, r *http.Request, value any) {

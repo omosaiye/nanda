@@ -18,6 +18,7 @@ Known hardening tasks for NANDA v0:
 12. Add W3C VC interoperability when v0 scope expands.
 13. Add DID resolution when v0 scope expands.
 14. Add stronger deployment hardening for production packaging and operations.
+15. Add richer audit search and export for operator workflows.
 
 Completed:
 
@@ -29,3 +30,4 @@ Completed:
 - Added production migration gating with `NANDA_AUTO_MIGRATE`.
 - Added PostgreSQL append-only trigger protection for `audit_events`.
 - Added minimal admin inspection API for agents, audit events, and revocation status.
+- Added pagination and simple filters for admin audit inspection.

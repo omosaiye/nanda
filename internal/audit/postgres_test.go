@@ -72,6 +72,28 @@ func TestPostgresAuditStore(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("event count = %d, want 2", len(events))
 	}
+
+	page, err := store.Query(ctx, Query{AgentID: "agent.example", Limit: 1, Offset: 1})
+	if err != nil {
+		t.Fatalf("query page: %v", err)
+	}
+	if page.Limit != 1 || page.Offset != 1 || page.Count != 1 {
+		t.Fatalf("page = limit %d offset %d count %d, want 1/1/1", page.Limit, page.Offset, page.Count)
+	}
+	if page.Items[0].EventID != second.EventID {
+		t.Fatalf("page event id = %q, want %q", page.Items[0].EventID, second.EventID)
+	}
+
+	filtered, err := store.Query(ctx, Query{EventType: EventResolveDenied, Decision: DecisionDenied})
+	if err != nil {
+		t.Fatalf("query filters: %v", err)
+	}
+	if filtered.Count != 1 || len(filtered.Items) != 1 {
+		t.Fatalf("filtered count/items = %d/%d, want 1/1", filtered.Count, len(filtered.Items))
+	}
+	if filtered.Items[0].EventID != second.EventID {
+		t.Fatalf("filtered event id = %q, want %q", filtered.Items[0].EventID, second.EventID)
+	}
 }
 
 func TestPostgresAuditEventsAppendOnlyGuardrail(t *testing.T) {

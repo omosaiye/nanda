@@ -57,6 +57,46 @@ func (s *MemoryStore) ListByAgent(_ context.Context, agentID string) ([]Event, e
 	return copyEvents(events), nil
 }
 
+func (s *MemoryStore) Query(_ context.Context, query Query) (ListResult, error) {
+	query, err := NormalizeQuery(query)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var matched []Event
+	for _, event := range s.events {
+		if query.AgentID != "" && event.AgentID != query.AgentID {
+			continue
+		}
+		if query.EventType != "" && event.EventType != query.EventType {
+			continue
+		}
+		if query.Decision != "" && event.Decision != query.Decision {
+			continue
+		}
+		matched = append(matched, event)
+	}
+
+	start := query.Offset
+	if start > len(matched) {
+		start = len(matched)
+	}
+	end := start + query.Limit
+	if end > len(matched) {
+		end = len(matched)
+	}
+	items := copyEvents(matched[start:end])
+	return ListResult{
+		Items:  items,
+		Limit:  query.Limit,
+		Offset: query.Offset,
+		Count:  len(items),
+	}, nil
+}
+
 func (s *MemoryStore) VerifyHashChain(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

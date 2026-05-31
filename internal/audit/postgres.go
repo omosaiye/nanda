@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -98,6 +99,61 @@ func (s *PostgresStore) ListByAgent(ctx context.Context, agentID string) ([]Even
 	defer rows.Close()
 
 	return scanEvents(rows)
+}
+
+func (s *PostgresStore) Query(ctx context.Context, query Query) (ListResult, error) {
+	query, err := NormalizeQuery(query)
+	if err != nil {
+		return ListResult{}, err
+	}
+
+	var args []any
+	var filters []string
+	addFilter := func(column string, value string) {
+		args = append(args, value)
+		filters = append(filters, fmt.Sprintf("%s = $%d", column, len(args)))
+	}
+	if query.AgentID != "" {
+		addFilter("agent_id", query.AgentID)
+	}
+	if query.EventType != "" {
+		addFilter("event_type", query.EventType)
+	}
+	if query.Decision != "" {
+		addFilter("decision", query.Decision)
+	}
+
+	where := ""
+	if len(filters) > 0 {
+		where = "WHERE " + strings.Join(filters, " AND ")
+	}
+	args = append(args, query.Limit)
+	limitParam := len(args)
+	args = append(args, query.Offset)
+	offsetParam := len(args)
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT event_id, event_type, agent_id, agent_hash, actor_hash, decision, reason, event_json, previous_hash, event_hash, created_at
+		FROM audit_events
+		%s
+		ORDER BY id ASC
+		LIMIT $%d OFFSET $%d
+	`, where, limitParam, offsetParam), args...)
+	if err != nil {
+		return ListResult{}, fmt.Errorf("query audit events: %w", err)
+	}
+	defer rows.Close()
+
+	events, err := scanEvents(rows)
+	if err != nil {
+		return ListResult{}, err
+	}
+	return ListResult{
+		Items:  events,
+		Limit:  query.Limit,
+		Offset: query.Offset,
+		Count:  len(events),
+	}, nil
 }
 
 func (s *PostgresStore) VerifyHashChain(ctx context.Context) error {

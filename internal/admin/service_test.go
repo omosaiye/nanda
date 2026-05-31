@@ -75,15 +75,18 @@ func TestListAudit(t *testing.T) {
 	event := appendAuditEvent(t, auditStore, "agent.example")
 	service := newTestService(t, &fakeIndexStore{}, auditStore, revocation.NewMemoryStore())
 
-	events, err := service.ListAudit(context.Background())
+	result, err := service.ListAudit(context.Background(), audit.Query{})
 	if err != nil {
 		t.Fatalf("ListAudit returned error: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("event count = %d, want 1", len(events))
+	if result.Limit != audit.DefaultListLimit || result.Offset != 0 || result.Count != 1 {
+		t.Fatalf("page = limit %d offset %d count %d, want %d/0/1", result.Limit, result.Offset, result.Count, audit.DefaultListLimit)
 	}
-	if events[0].EventID != event.EventID {
-		t.Fatalf("event id = %q, want %q", events[0].EventID, event.EventID)
+	if len(result.Items) != 1 {
+		t.Fatalf("event count = %d, want 1", len(result.Items))
+	}
+	if result.Items[0].EventID != event.EventID {
+		t.Fatalf("event id = %q, want %q", result.Items[0].EventID, event.EventID)
 	}
 }
 
@@ -93,15 +96,24 @@ func TestListAuditByAgent(t *testing.T) {
 	appendAuditEvent(t, auditStore, "other.example")
 	service := newTestService(t, &fakeIndexStore{}, auditStore, revocation.NewMemoryStore())
 
-	events, err := service.ListAuditByAgent(context.Background(), " Agent.Example ")
+	result, err := service.ListAuditByAgent(context.Background(), " Agent.Example ", audit.Query{})
 	if err != nil {
 		t.Fatalf("ListAuditByAgent returned error: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("event count = %d, want 1", len(events))
+	if result.Count != 1 || len(result.Items) != 1 {
+		t.Fatalf("event count = %d/%d, want 1/1", result.Count, len(result.Items))
 	}
-	if events[0].EventID != want.EventID {
-		t.Fatalf("event id = %q, want %q", events[0].EventID, want.EventID)
+	if result.Items[0].EventID != want.EventID {
+		t.Fatalf("event id = %q, want %q", result.Items[0].EventID, want.EventID)
+	}
+}
+
+func TestListAuditInvalidOptions(t *testing.T) {
+	service := newTestService(t, &fakeIndexStore{}, audit.NewMemoryStore(), revocation.NewMemoryStore())
+
+	_, err := service.ListAudit(context.Background(), audit.Query{EventType: "unknown"})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("ListAudit error = %v, want %v", err, ErrValidation)
 	}
 }
 

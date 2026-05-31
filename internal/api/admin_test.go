@@ -100,10 +100,15 @@ func TestAdminGetAgentHandlerErrors(t *testing.T) {
 
 func TestAdminListAuditHandlerSuccess(t *testing.T) {
 	service := &fakeAdminService{
-		events: []audit.Event{{EventID: "event-1", AgentID: "agent.example"}},
+		auditResult: audit.ListResult{
+			Items:  []audit.Event{{EventID: "event-1", AgentID: "agent.example"}},
+			Limit:  1,
+			Offset: 0,
+			Count:  1,
+		},
 	}
 	handler := AdminListAuditHandler(service)
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/audit", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/audit?limit=1&offset=0", nil)
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -114,21 +119,32 @@ func TestAdminListAuditHandlerSuccess(t *testing.T) {
 	if !service.listAuditCalled {
 		t.Fatal("ListAudit was not called")
 	}
-	var got []audit.Event
+	if service.auditQuery.Limit != 1 || service.auditQuery.Offset != 0 {
+		t.Fatalf("query = %+v, want limit 1 offset 0", service.auditQuery)
+	}
+	var got audit.ListResult
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(got) != 1 || got[0].EventID != "event-1" {
-		t.Fatalf("events = %+v, want event-1", got)
+	if got.Limit != 1 || got.Offset != 0 || got.Count != 1 {
+		t.Fatalf("page = %+v, want limit 1 offset 0 count 1", got)
+	}
+	if len(got.Items) != 1 || got.Items[0].EventID != "event-1" {
+		t.Fatalf("events = %+v, want event-1", got.Items)
 	}
 }
 
 func TestAdminListAuditByAgentHandlerSuccess(t *testing.T) {
 	service := &fakeAdminService{
-		events: []audit.Event{{EventID: "event-1", AgentID: "agent.example"}},
+		auditResult: audit.ListResult{
+			Items:  []audit.Event{{EventID: "event-1", AgentID: "agent.example", EventType: audit.EventResolveAllowed, Decision: audit.DecisionAllowed}},
+			Limit:  audit.DefaultListLimit,
+			Offset: 0,
+			Count:  1,
+		},
 	}
 	handler := AdminListAuditByAgentHandler(service)
-	req := httptest.NewRequest(http.MethodGet, "/v1/admin/audit/agent.example", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/audit/agent.example?eventType=resolve.allowed&decision=allowed", nil)
 	req.SetPathValue("agentId", "agent.example")
 	rec := httptest.NewRecorder()
 
@@ -140,6 +156,29 @@ func TestAdminListAuditByAgentHandlerSuccess(t *testing.T) {
 	if service.agentID != "agent.example" {
 		t.Fatalf("agent id = %q, want agent.example", service.agentID)
 	}
+	if service.auditQuery.EventType != audit.EventResolveAllowed || service.auditQuery.Decision != audit.DecisionAllowed {
+		t.Fatalf("query = %+v, want resolve.allowed/allowed", service.auditQuery)
+	}
+	var got audit.ListResult
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Count != 1 || len(got.Items) != 1 || got.Items[0].EventID != "event-1" {
+		t.Fatalf("response = %+v, want event-1", got)
+	}
+}
+
+func TestAdminListAuditHandlerInvalidQuery(t *testing.T) {
+	handler := AdminListAuditHandler(&fakeAdminService{})
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/audit?limit=not-an-int", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertJSONError(t, rec, "admin_validation_failed", "admin validation failed: limit: limit must be a positive integer")
 }
 
 func TestAdminGetRevocationStatusHandlerSuccess(t *testing.T) {
@@ -218,13 +257,14 @@ func TestAdminHandlerSetsRequestIDHeader(t *testing.T) {
 
 type fakeAdminService struct {
 	agent           admin.AgentResponse
-	events          []audit.Event
+	auditResult     audit.ListResult
 	revocation      admin.RevocationStatusResponse
 	err             error
 	agentID         string
 	issuer          string
 	credentialID    string
 	listAuditCalled bool
+	auditQuery      audit.Query
 }
 
 func (s *fakeAdminService) GetAgent(_ context.Context, agentID string) (admin.AgentResponse, error) {
@@ -235,20 +275,22 @@ func (s *fakeAdminService) GetAgent(_ context.Context, agentID string) (admin.Ag
 	return s.agent, nil
 }
 
-func (s *fakeAdminService) ListAudit(_ context.Context) ([]audit.Event, error) {
+func (s *fakeAdminService) ListAudit(_ context.Context, query audit.Query) (audit.ListResult, error) {
 	s.listAuditCalled = true
+	s.auditQuery = query
 	if s.err != nil {
-		return nil, s.err
+		return audit.ListResult{}, s.err
 	}
-	return s.events, nil
+	return s.auditResult, nil
 }
 
-func (s *fakeAdminService) ListAuditByAgent(_ context.Context, agentID string) ([]audit.Event, error) {
+func (s *fakeAdminService) ListAuditByAgent(_ context.Context, agentID string, query audit.Query) (audit.ListResult, error) {
 	s.agentID = agentID
+	s.auditQuery = query
 	if s.err != nil {
-		return nil, s.err
+		return audit.ListResult{}, s.err
 	}
-	return s.events, nil
+	return s.auditResult, nil
 }
 
 func (s *fakeAdminService) GetRevocationStatus(_ context.Context, issuer string, credentialID string) (admin.RevocationStatusResponse, error) {
