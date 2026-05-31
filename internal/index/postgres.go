@@ -1,6 +1,7 @@
 package index
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -41,6 +42,22 @@ func (s *PostgresStore) Put(ctx context.Context, agentID string, record agentadd
 	defer func() {
 		_ = tx.Rollback()
 	}()
+
+	current, err := getCurrentForUpdate(ctx, tx, agentHash)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("get current agent address record for update: %w", err)
+	}
+	if err == nil {
+		switch {
+		case payload.Sequence < current.Sequence:
+			return ErrStaleSequence
+		case payload.Sequence == current.Sequence:
+			if bytes.Equal(record.Encode(), current.Record.Encode()) {
+				return tx.Commit()
+			}
+			return ErrSequenceConflict
+		}
+	}
 
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO agent_addr_history (
@@ -90,6 +107,31 @@ func (s *PostgresStore) Put(ctx context.Context, agentID string, record agentadd
 	}
 
 	return nil
+}
+
+func getCurrentForUpdate(ctx context.Context, tx *sql.Tx, agentHash [16]byte) (IndexedRecord, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT
+			agent_hash,
+			agent_id,
+			record_bytes,
+			sequence,
+			ttl_seconds,
+			created_at,
+			updated_at
+		FROM agent_addr_records
+		WHERE agent_hash = $1
+		FOR UPDATE
+	`, agentHash[:])
+
+	record, err := scanIndexedRecord(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return IndexedRecord{}, ErrNotFound
+	}
+	if err != nil {
+		return IndexedRecord{}, err
+	}
+	return record, nil
 }
 
 func (s *PostgresStore) Get(ctx context.Context, agentHash [16]byte) (IndexedRecord, error) {

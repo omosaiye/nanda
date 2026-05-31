@@ -119,6 +119,22 @@ func TestResolveAgentHandlerTrustDenied(t *testing.T) {
 	assertJSONError(t, rec, "trust_denied", resolver.ErrTrustDenied.Error())
 }
 
+func TestResolveAgentHandlerExpired(t *testing.T) {
+	service := &fakeResolverService{err: resolver.ErrExpired}
+	handler := ResolveAgentHandler(service)
+	req := httptest.NewRequest(http.MethodPost, "/v1/resolve", strings.NewReader(`{
+		"agentId": "agent.example"
+	}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusGone, rec.Body.String())
+	}
+	assertJSONError(t, rec, "expired", resolver.ErrExpired.Error())
+}
+
 func TestResolveAgentHandlerRejectsNonPost(t *testing.T) {
 	handler := ResolveAgentHandler(&fakeResolverService{})
 	req := httptest.NewRequest(http.MethodGet, "/v1/resolve", nil)

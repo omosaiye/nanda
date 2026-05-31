@@ -17,10 +17,14 @@ import (
 
 func TestGetAgentSuccess(t *testing.T) {
 	record := testAgentRecord(t, "agent.example")
+	createdAt := time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(time.Hour)
 	store := &fakeIndexStore{
 		record: index.IndexedRecord{
-			AgentID: "agent.example",
-			Record:  record,
+			AgentID:   "agent.example",
+			Record:    record,
+			CreatedAt: createdAt,
+			UpdatedAt: updatedAt,
 		},
 	}
 	service := newTestService(t, store, audit.NewMemoryStore(), revocation.NewMemoryStore())
@@ -55,6 +59,19 @@ func TestGetAgentSuccess(t *testing.T) {
 	}
 	if resp.RecordBase64 != base64.StdEncoding.EncodeToString(record.Encode()) {
 		t.Fatalf("record base64 = %q, want %q", resp.RecordBase64, base64.StdEncoding.EncodeToString(record.Encode()))
+	}
+	if resp.CreatedAt != createdAt.Format(time.RFC3339) {
+		t.Fatalf("createdAt = %q, want %q", resp.CreatedAt, createdAt.Format(time.RFC3339))
+	}
+	if resp.UpdatedAt != updatedAt.Format(time.RFC3339) {
+		t.Fatalf("updatedAt = %q, want %q", resp.UpdatedAt, updatedAt.Format(time.RFC3339))
+	}
+	wantExpiresAt := updatedAt.Add(time.Duration(payload.TTLSeconds) * time.Second).Format(time.RFC3339)
+	if resp.ExpiresAt != wantExpiresAt {
+		t.Fatalf("expiresAt = %q, want %q", resp.ExpiresAt, wantExpiresAt)
+	}
+	if resp.Expired {
+		t.Fatal("expired = true, want false")
 	}
 	if store.gotHash != agentHash {
 		t.Fatalf("store hash = %x, want %x", store.gotHash, agentHash)

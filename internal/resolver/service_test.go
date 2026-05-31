@@ -60,6 +60,15 @@ func TestServiceResolveSuccess(t *testing.T) {
 	if resp.ProofBundle.CapabilityCredentialVerified {
 		t.Fatal("capability credential proof was verified without a required capability")
 	}
+	if resp.Cache.SourceSequence != record.Payload().Sequence {
+		t.Fatalf("source sequence = %d, want %d", resp.Cache.SourceSequence, record.Payload().Sequence)
+	}
+	if resp.Cache.TTLSeconds != 60 {
+		t.Fatalf("cache ttl = %d, want 60", resp.Cache.TTLSeconds)
+	}
+	if want := testNow().Add(60 * time.Second); !resp.Cache.ExpiresAt.Equal(want) {
+		t.Fatalf("cache expiresAt = %s, want %s", resp.Cache.ExpiresAt, want)
+	}
 }
 
 func TestServiceResolveSuccessWritesAuditEvent(t *testing.T) {
@@ -85,6 +94,23 @@ func TestServiceResolveSuccessWritesAuditEvent(t *testing.T) {
 	}
 	if event.AgentID != "agent.example" {
 		t.Fatalf("agent id = %q, want agent.example", event.AgentID)
+	}
+	var payload struct {
+		Result struct {
+			Cache struct {
+				TTLSeconds     int    `json:"ttlSeconds"`
+				SourceSequence uint32 `json:"sourceSequence"`
+			} `json:"cache"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(event.EventJSON, &payload); err != nil {
+		t.Fatalf("unmarshal audit payload: %v", err)
+	}
+	if payload.Result.Cache.TTLSeconds != 60 {
+		t.Fatalf("audit cache ttl = %d, want 60", payload.Result.Cache.TTLSeconds)
+	}
+	if payload.Result.Cache.SourceSequence != record.Payload().Sequence {
+		t.Fatalf("audit source sequence = %d, want %d", payload.Result.Cache.SourceSequence, record.Payload().Sequence)
 	}
 }
 
@@ -370,6 +396,115 @@ func TestServiceResolveMissingAgentFactsReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestServiceResolveExpiredL1RecordFails(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	record := testRecordWithTTLAndSequence(t, "agent.example", facts.PointerHash128(pointer), agentaddr.Hash128(nil), 60, 1, privateKey)
+	service := newTestServiceWithIndexOptions(t, publicKey, &fakeIndexStore{
+		record:    record,
+		updatedAt: testNow().Add(-61 * time.Second),
+	}, pointer, testFactsBytes(t, []agentfacts.Endpoint{
+		testEndpoint("static", agentfacts.EndpointTypeStatic),
+	}))
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+	if !errors.Is(err, ErrExpired) {
+		t.Fatalf("resolve error = %v, want expired", err)
+	}
+}
+
+func TestServiceResolveExpiredL1RecordWritesAuditEvent(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	record := testRecordWithTTLAndSequence(t, "agent.example", facts.PointerHash128(pointer), agentaddr.Hash128(nil), 60, 1, privateKey)
+	auditStore := audit.NewMemoryStore()
+	service := newTestServiceWithIndexOptions(t, publicKey, &fakeIndexStore{
+		record:    record,
+		updatedAt: testNow().Add(-61 * time.Second),
+	}, pointer, testFactsBytes(t, []agentfacts.Endpoint{
+		testEndpoint("static", agentfacts.EndpointTypeStatic),
+	}), WithAuditStore(auditStore))
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+	if !errors.Is(err, ErrExpired) {
+		t.Fatalf("resolve error = %v, want expired", err)
+	}
+
+	events := requireAuditEvents(t, auditStore, 1)
+	event := events[0]
+	if event.EventType != audit.EventResolveDenied {
+		t.Fatalf("event type = %q, want %q", event.EventType, audit.EventResolveDenied)
+	}
+	if event.Decision != audit.DecisionDenied {
+		t.Fatalf("decision = %q, want %q", event.Decision, audit.DecisionDenied)
+	}
+	if event.Reason == "" {
+		t.Fatal("expired denial audit event reason is empty")
+	}
+	var payload struct {
+		Result struct {
+			Error  string `json:"error"`
+			Reason string `json:"reason"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(event.EventJSON, &payload); err != nil {
+		t.Fatalf("unmarshal audit payload: %v", err)
+	}
+	if payload.Result.Error == "" {
+		t.Fatal("expired denial audit payload error is empty")
+	}
+	if payload.Result.Reason == "" {
+		t.Fatal("expired denial audit payload reason is empty")
+	}
+}
+
+func TestServiceResolveCacheTTLUsesMinimumOfL1RemainingAndEndpointTTL(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+
+	t.Run("endpoint ttl lower", func(t *testing.T) {
+		record := testRecordWithTTLAndSequence(t, "agent.example", facts.PointerHash128(pointer), agentaddr.Hash128(nil), 300, 9, privateKey)
+		service := newTestServiceWithIndexOptions(t, publicKey, &fakeIndexStore{
+			record:    record,
+			updatedAt: testNow().Add(-10 * time.Second),
+		}, pointer, testFactsBytes(t, []agentfacts.Endpoint{
+			testEndpointWithTTL("static", agentfacts.EndpointTypeStatic, 60),
+		}))
+
+		resp, err := service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if resp.Cache.TTLSeconds != 60 {
+			t.Fatalf("cache ttl = %d, want 60", resp.Cache.TTLSeconds)
+		}
+		if resp.Cache.SourceSequence != 9 {
+			t.Fatalf("source sequence = %d, want 9", resp.Cache.SourceSequence)
+		}
+	})
+
+	t.Run("l1 ttl lower", func(t *testing.T) {
+		record := testRecordWithTTLAndSequence(t, "agent.example", facts.PointerHash128(pointer), agentaddr.Hash128(nil), 90, 10, privateKey)
+		service := newTestServiceWithIndexOptions(t, publicKey, &fakeIndexStore{
+			record:    record,
+			updatedAt: testNow().Add(-30 * time.Second),
+		}, pointer, testFactsBytes(t, []agentfacts.Endpoint{
+			testEndpointWithTTL("static", agentfacts.EndpointTypeStatic, 120),
+		}))
+
+		resp, err := service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if resp.Cache.TTLSeconds != 60 {
+			t.Fatalf("cache ttl = %d, want 60", resp.Cache.TTLSeconds)
+		}
+		if resp.Cache.SourceSequence != 10 {
+			t.Fatalf("source sequence = %d, want 10", resp.Cache.SourceSequence)
+		}
+	})
+}
+
 func TestServiceResolveBadSignatureFails(t *testing.T) {
 	publicKey, _ := testKeyPair(t)
 	_, signingKey := testKeyPair(t)
@@ -489,8 +624,10 @@ func TestServiceResolveEndpointSelectionPriority(t *testing.T) {
 }
 
 type fakeIndexStore struct {
-	record agentaddr.AgentAddr120
-	getErr error
+	record    agentaddr.AgentAddr120
+	createdAt time.Time
+	updatedAt time.Time
+	getErr    error
 }
 
 func (s *fakeIndexStore) Put(_ context.Context, _ string, _ agentaddr.AgentAddr120) error {
@@ -501,7 +638,22 @@ func (s *fakeIndexStore) Get(_ context.Context, agentHash [16]byte) (index.Index
 	if s.getErr != nil {
 		return index.IndexedRecord{}, s.getErr
 	}
-	return index.IndexedRecord{AgentHash: agentHash, AgentID: "agent.example", Record: s.record}, nil
+	createdAt := s.createdAt
+	if createdAt.IsZero() {
+		createdAt = testNow().Add(-time.Minute)
+	}
+	updatedAt := s.updatedAt
+	if updatedAt.IsZero() {
+		updatedAt = createdAt
+	}
+	return index.IndexedRecord{
+		AgentHash: agentHash,
+		AgentID:   "agent.example",
+		Record:    s.record,
+		Sequence:  s.record.Payload().Sequence,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+	}, nil
 }
 
 func (s *fakeIndexStore) History(_ context.Context, _ [16]byte) ([]index.IndexedRecord, error) {
@@ -549,8 +701,14 @@ func newTestService(t *testing.T, publicKey ed25519.PublicKey, record agentaddr.
 func newTestServiceWithOptions(t *testing.T, publicKey ed25519.PublicKey, record agentaddr.AgentAddr120, pointer facts.FactsPointer, factsBytes []byte, opts ...Option) *Service {
 	t.Helper()
 
+	return newTestServiceWithIndexOptions(t, publicKey, &fakeIndexStore{record: record}, pointer, factsBytes, opts...)
+}
+
+func newTestServiceWithIndexOptions(t *testing.T, publicKey ed25519.PublicKey, indexStore *fakeIndexStore, pointer facts.FactsPointer, factsBytes []byte, opts ...Option) *Service {
+	t.Helper()
+
 	service, err := NewService(
-		&fakeIndexStore{record: record},
+		indexStore,
 		&fakeFactsStore{pointer: pointer, data: factsBytes},
 		&fakePointerResolver{pointer: pointer},
 		publicKey,
@@ -559,7 +717,7 @@ func newTestServiceWithOptions(t *testing.T, publicKey ed25519.PublicKey, record
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
-	service.now = func() time.Time { return time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC) }
+	service.now = testNow
 	return service
 }
 
@@ -592,7 +750,13 @@ func testRecord(t *testing.T, agentID string, factsPtrHash [16]byte, privateKey 
 func testRecordWithCredentialSet(t *testing.T, agentID string, factsPtrHash [16]byte, credentialSet128 [16]byte, privateKey ed25519.PrivateKey) agentaddr.AgentAddr120 {
 	t.Helper()
 
-	payload, err := agentaddr.New(agentID, 300, 0, 1, factsPtrHash, credentialSet128)
+	return testRecordWithTTLAndSequence(t, agentID, factsPtrHash, credentialSet128, 300, 1, privateKey)
+}
+
+func testRecordWithTTLAndSequence(t *testing.T, agentID string, factsPtrHash [16]byte, credentialSet128 [16]byte, ttlSeconds uint16, sequence uint32, privateKey ed25519.PrivateKey) agentaddr.AgentAddr120 {
+	t.Helper()
+
+	payload, err := agentaddr.New(agentID, ttlSeconds, 0, sequence, factsPtrHash, credentialSet128)
 	if err != nil {
 		t.Fatalf("new payload: %v", err)
 	}
@@ -697,13 +861,21 @@ func testTrustVerifier(t *testing.T, issuerPublicKey ed25519.PublicKey) *trust.V
 }
 
 func testEndpoint(id string, endpointType string) agentfacts.Endpoint {
+	return testEndpointWithTTL(id, endpointType, 60)
+}
+
+func testEndpointWithTTL(id string, endpointType string, ttlSeconds uint16) agentfacts.Endpoint {
 	return agentfacts.Endpoint{
 		ID:         id,
 		Type:       endpointType,
 		URL:        "https://" + id + ".agent.example",
 		Protocol:   "https",
-		TTLSeconds: 60,
+		TTLSeconds: ttlSeconds,
 	}
+}
+
+func testNow() time.Time {
+	return time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
 }
 
 func testKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {

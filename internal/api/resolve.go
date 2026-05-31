@@ -50,6 +50,10 @@ func ResolveAgentHandler(service ResolverService) http.Handler {
 				WriteJSONError(w, r, http.StatusForbidden, "trust_denied", err.Error())
 				return
 			}
+			if errors.Is(err, resolver.ErrExpired) {
+				WriteJSONError(w, r, http.StatusGone, "expired", err.Error())
+				return
+			}
 			slog.Error("resolve failed", "err", err, "request_id", RequestID(r))
 			WriteJSONError(w, r, http.StatusInternalServerError, "internal_error", http.StatusText(http.StatusInternalServerError))
 			return

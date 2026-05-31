@@ -77,6 +77,8 @@ curl -sS -X POST http://localhost:8080/v1/resolve \
   --data-binary @docs/examples/resolve-agent.json
 ```
 
+Resolver responses include additive `cache` metadata with `ttlSeconds`, `expiresAt`, and `sourceSequence`. The cache TTL is capped by both the remaining L1 `AgentAddr120` TTL and the selected endpoint TTL. The L1 index rejects stale sequence overwrites, and same-sequence updates are idempotent only when the record bytes are identical.
+
 ## Admin Inspection
 
 Set `TOKEN_HEADER` only when the server was started with `NANDA_API_TOKEN`:

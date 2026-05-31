@@ -8,7 +8,11 @@ import (
 	"github.com/solai/nanda/internal/agentaddr"
 )
 
-var ErrNotFound = errors.New("agent address record not found")
+var (
+	ErrNotFound         = errors.New("agent address record not found")
+	ErrStaleSequence    = errors.New("agent address record sequence is stale")
+	ErrSequenceConflict = errors.New("agent address record sequence conflicts with current record")
+)
 
 type IndexedRecord struct {
 	AgentHash  [16]byte

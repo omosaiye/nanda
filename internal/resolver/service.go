@@ -30,6 +30,7 @@ var (
 	ErrMissingPointerResolver = errors.New("resolver service requires a facts pointer resolver")
 	ErrNoEndpoint             = errors.New("no endpoint available")
 	ErrTrustDenied            = errors.New("resolve trust denied")
+	ErrExpired                = errors.New("agent address record expired")
 )
 
 type ValidationError struct {
@@ -102,6 +103,13 @@ type ResolveResponse struct {
 	Endpoint      agentfacts.Endpoint `json:"endpoint"`
 	TrustDecision string              `json:"trustDecision"`
 	ProofBundle   ProofBundle         `json:"proofBundle"`
+	Cache         CacheMetadata       `json:"cache"`
+}
+
+type CacheMetadata struct {
+	TTLSeconds     int       `json:"ttlSeconds"`
+	ExpiresAt      time.Time `json:"expiresAt"`
+	SourceSequence uint32    `json:"sourceSequence"`
 }
 
 type ProofBundle struct {
@@ -154,6 +162,7 @@ func NewService(indexStore index.LeanIndexStore, factsStore facts.FactsStore, po
 }
 
 func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse, error) {
+	now := s.now()
 	agentID, err := agentaddr.NormalizeAgentID(req.AgentID)
 	if err != nil {
 		resolveErr := ValidationError{Field: "agentId", Err: err}
@@ -188,6 +197,11 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 		resolveErr := VerificationError{Step: "agent id hash", Err: errors.New("record hash does not match requested agent id")}
 		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
+	l1TTLSeconds, err := l1Freshness(indexedRecord, payload, now)
+	if err != nil {
+		resolveErr := fmt.Errorf("%w: %w", ErrExpired, err)
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
+	}
 
 	pointer, err := s.pointerResolver.ResolveFactsPointer(ctx, payload.FactsPtrHash128)
 	if errors.Is(err, facts.ErrNotFound) {
@@ -218,7 +232,7 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 		resolveErr := ValidationError{Field: "agentFacts", Err: fmt.Errorf("invalid JSON: %w", err)}
 		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
-	if err := agentfacts.Validate(decodedFacts, agentID, req.RequiredCapability, s.now()); err != nil {
+	if err := agentfacts.Validate(decodedFacts, agentID, req.RequiredCapability, now); err != nil {
 		resolveErr := ValidationError{Field: "agentFacts", Err: err}
 		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
@@ -239,7 +253,7 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 			resolveErr := fmt.Errorf("%w: trust verifier is not configured", ErrTrustDenied)
 			return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventTrustDenied, resolveErr)
 		}
-		if err := s.trustVerifier.VerifyCapability(ctx, decodedFacts.Credentials, agentID, req.RequiredCapability, s.now()); err != nil {
+		if err := s.trustVerifier.VerifyCapability(ctx, decodedFacts.Credentials, agentID, req.RequiredCapability, now); err != nil {
 			resolveErr := fmt.Errorf("%w: %w", ErrTrustDenied, err)
 			return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventTrustDenied, resolveErr)
 		}
@@ -252,6 +266,7 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 		resolveErr := ValidationError{Field: "endpoints", Err: ErrNoEndpoint}
 		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
+	cacheTTLSeconds := min(l1TTLSeconds, int(endpoint.TTLSeconds))
 
 	resp := ResolveResponse{
 		AgentID:       agentID,
@@ -265,12 +280,37 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 			CredentialStatus:              CredentialStatusNotImplemented,
 			CapabilityCredentialVerified:  capabilityCredentialVerified,
 		},
+		Cache: CacheMetadata{
+			TTLSeconds:     cacheTTLSeconds,
+			ExpiresAt:      now.Add(time.Duration(cacheTTLSeconds) * time.Second).UTC(),
+			SourceSequence: payload.Sequence,
+		},
 	}
 	if err := s.auditResolveSuccess(ctx, req, resp, agentHashHex); err != nil {
 		return ResolveResponse{}, err
 	}
 
 	return resp, nil
+}
+
+func l1Freshness(record index.IndexedRecord, payload agentaddr.Payload, now time.Time) (int, error) {
+	recordTime := record.UpdatedAt
+	if recordTime.IsZero() {
+		recordTime = record.CreatedAt
+	}
+	if recordTime.IsZero() {
+		return 0, errors.New("missing index record timestamp")
+	}
+
+	expiresAt := recordTime.UTC().Add(time.Duration(payload.TTLSeconds) * time.Second)
+	if !expiresAt.After(now) {
+		return 0, fmt.Errorf("expired at %s", expiresAt.Format(time.RFC3339))
+	}
+	remaining := int(expiresAt.Sub(now) / time.Second)
+	if remaining <= 0 {
+		return 0, fmt.Errorf("less than one second remains before %s", expiresAt.Format(time.RFC3339))
+	}
+	return remaining, nil
 }
 
 func (s *Service) auditResolveSuccess(ctx context.Context, req ResolveRequest, resp ResolveResponse, agentHash string) error {
@@ -288,6 +328,10 @@ func (s *Service) auditResolveSuccess(ctx context.Context, req ResolveRequest, r
 			"endpointType":  resp.Endpoint.Type,
 			"trustDecision": resp.TrustDecision,
 			"proofBundle":   resp.ProofBundle,
+			"cache": map[string]any{
+				"ttlSeconds":     resp.Cache.TTLSeconds,
+				"sourceSequence": resp.Cache.SourceSequence,
+			},
 		},
 	})
 	if err != nil {
@@ -315,7 +359,8 @@ func (s *Service) auditResolveFailure(ctx context.Context, req ResolveRequest, a
 			"requiredCapability": req.RequiredCapability,
 		},
 		"result": map[string]any{
-			"error": resolveErr.Error(),
+			"error":  resolveErr.Error(),
+			"reason": resolveErr.Error(),
 		},
 	})
 	if err != nil {

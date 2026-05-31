@@ -56,6 +56,10 @@ type AgentResponse struct {
 	FactsPtrHash128  string `json:"factsPtrHash128"`
 	CredentialSet128 string `json:"credentialSet128"`
 	RecordBase64     string `json:"recordBase64"`
+	CreatedAt        string `json:"createdAt,omitempty"`
+	UpdatedAt        string `json:"updatedAt,omitempty"`
+	ExpiresAt        string `json:"expiresAt,omitempty"`
+	Expired          bool   `json:"expired"`
 }
 
 type RevocationStatusResponse struct {
@@ -102,6 +106,25 @@ func (s *Service) GetAgent(ctx context.Context, agentID string) (AgentResponse, 
 	}
 
 	payload := record.Record.Payload()
+	recordTime := record.UpdatedAt
+	if recordTime.IsZero() {
+		recordTime = record.CreatedAt
+	}
+	var createdAt string
+	if !record.CreatedAt.IsZero() {
+		createdAt = record.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	var updatedAt string
+	if !record.UpdatedAt.IsZero() {
+		updatedAt = record.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	var expiresAt string
+	var expired bool
+	if !recordTime.IsZero() {
+		expires := recordTime.UTC().Add(time.Duration(payload.TTLSeconds) * time.Second)
+		expiresAt = expires.Format(time.RFC3339)
+		expired = !expires.After(time.Now())
+	}
 	return AgentResponse{
 		AgentID:          normalizedAgentID,
 		AgentHash:        hex.EncodeToString(agentHash[:]),
@@ -110,6 +133,10 @@ func (s *Service) GetAgent(ctx context.Context, agentID string) (AgentResponse, 
 		FactsPtrHash128:  hex.EncodeToString(payload.FactsPtrHash128[:]),
 		CredentialSet128: hex.EncodeToString(payload.CredentialSet128[:]),
 		RecordBase64:     base64.StdEncoding.EncodeToString(record.Record.Encode()),
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
+		ExpiresAt:        expiresAt,
+		Expired:          expired,
 	}, nil
 }
 
