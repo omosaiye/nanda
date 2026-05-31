@@ -45,6 +45,10 @@ func ResolveAgentHandler(service ResolverService) http.Handler {
 				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
 				return
 			}
+			if errors.Is(err, resolver.ErrTrustDenied) {
+				http.Error(w, err.Error(), http.StatusForbidden)
+				return
+			}
 			slog.Error("resolve failed", "err", err)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return

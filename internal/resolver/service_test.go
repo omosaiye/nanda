@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/solai/nanda/internal/agentfacts"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
+	"github.com/solai/nanda/internal/trust"
 )
 
 func TestServiceResolveSuccess(t *testing.T) {
@@ -23,8 +25,7 @@ func TestServiceResolveSuccess(t *testing.T) {
 	}))
 
 	resp, err := service.Resolve(context.Background(), ResolveRequest{
-		AgentID:            " Agent.Example ",
-		RequiredCapability: "chat",
+		AgentID: " Agent.Example ",
 	})
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -50,6 +51,123 @@ func TestServiceResolveSuccess(t *testing.T) {
 	}
 	if resp.ProofBundle.CredentialStatus != CredentialStatusNotImplemented {
 		t.Fatalf("credential status = %q, want %q", resp.ProofBundle.CredentialStatus, CredentialStatusNotImplemented)
+	}
+	if resp.ProofBundle.CapabilityCredentialVerified {
+		t.Fatal("capability credential proof was verified without a required capability")
+	}
+}
+
+func TestServiceResolveRequiredCapabilityWithValidCredential(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
+	credential := testCapabilityCredential()
+	signCredential(t, &credential, issuerPrivateKey)
+	verifier := testTrustVerifier(t, issuerPublicKey)
+	service := newTestServiceWithOptions(t, publicKey, record, pointer, testFactsBytesWithCredentials(t, []agentfacts.CapabilityCredential{credential}), WithTrustVerifier(verifier))
+
+	resp, err := service.Resolve(context.Background(), ResolveRequest{
+		AgentID:            " Agent.Example ",
+		RequiredCapability: "chat",
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+
+	if resp.TrustDecision != TrustDecisionVerifiedV0 {
+		t.Fatalf("trust decision = %q, want %q", resp.TrustDecision, TrustDecisionVerifiedV0)
+	}
+	if !resp.ProofBundle.CapabilityCredentialVerified {
+		t.Fatal("capability credential proof was not verified")
+	}
+	if resp.ProofBundle.CredentialStatus != CredentialStatusNotImplemented {
+		t.Fatalf("credential status = %q, want %q", resp.ProofBundle.CredentialStatus, CredentialStatusNotImplemented)
+	}
+}
+
+func TestServiceResolveRequiredCapabilityWithUntrustedIssuerFails(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	credential.Issuer = "did:example:untrusted"
+	signCredential(t, &credential, issuerPrivateKey)
+	service := newCredentialTestService(t, publicKey, privateKey, []agentfacts.CapabilityCredential{credential}, issuerPublicKey)
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{
+		AgentID:            "agent.example",
+		RequiredCapability: "chat",
+	})
+	if !errors.Is(err, ErrTrustDenied) {
+		t.Fatalf("resolve error = %v, want trust denied", err)
+	}
+}
+
+func TestServiceResolveRequiredCapabilityWithBadCredentialSignatureFails(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	issuerPublicKey, _ := testKeyPair(t)
+	_, wrongIssuerPrivateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	signCredential(t, &credential, wrongIssuerPrivateKey)
+	service := newCredentialTestService(t, publicKey, privateKey, []agentfacts.CapabilityCredential{credential}, issuerPublicKey)
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{
+		AgentID:            "agent.example",
+		RequiredCapability: "chat",
+	})
+	if !errors.Is(err, ErrTrustDenied) {
+		t.Fatalf("resolve error = %v, want trust denied", err)
+	}
+}
+
+func TestServiceResolveRequiredCapabilityWithSubjectMismatchFails(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	credential.Subject = "other.example"
+	signCredential(t, &credential, issuerPrivateKey)
+	service := newCredentialTestService(t, publicKey, privateKey, []agentfacts.CapabilityCredential{credential}, issuerPublicKey)
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{
+		AgentID:            "agent.example",
+		RequiredCapability: "chat",
+	})
+	if !errors.Is(err, ErrTrustDenied) {
+		t.Fatalf("resolve error = %v, want trust denied", err)
+	}
+}
+
+func TestServiceResolveRequiredCapabilityWithExpiredCredentialFails(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	credential.ValidUntil = time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	signCredential(t, &credential, issuerPrivateKey)
+	service := newCredentialTestService(t, publicKey, privateKey, []agentfacts.CapabilityCredential{credential}, issuerPublicKey)
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{
+		AgentID:            "agent.example",
+		RequiredCapability: "chat",
+	})
+	if !errors.Is(err, ErrTrustDenied) {
+		t.Fatalf("resolve error = %v, want trust denied", err)
+	}
+}
+
+func TestServiceResolveRequiredCapabilityMissingCredentialCapabilityFails(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	credential.Capabilities = []string{"status"}
+	signCredential(t, &credential, issuerPrivateKey)
+	service := newCredentialTestService(t, publicKey, privateKey, []agentfacts.CapabilityCredential{credential}, issuerPublicKey)
+
+	_, err := service.Resolve(context.Background(), ResolveRequest{
+		AgentID:            "agent.example",
+		RequiredCapability: "chat",
+	})
+	if !errors.Is(err, ErrTrustDenied) {
+		t.Fatalf("resolve error = %v, want trust denied", err)
 	}
 }
 
@@ -231,17 +349,33 @@ func (r *fakePointerResolver) ResolveFactsPointer(_ context.Context, _ [16]byte)
 func newTestService(t *testing.T, publicKey ed25519.PublicKey, record agentaddr.AgentAddr120, pointer facts.FactsPointer, factsBytes []byte) *Service {
 	t.Helper()
 
+	return newTestServiceWithOptions(t, publicKey, record, pointer, factsBytes)
+}
+
+func newTestServiceWithOptions(t *testing.T, publicKey ed25519.PublicKey, record agentaddr.AgentAddr120, pointer facts.FactsPointer, factsBytes []byte, opts ...Option) *Service {
+	t.Helper()
+
 	service, err := NewService(
 		&fakeIndexStore{record: record},
 		&fakeFactsStore{pointer: pointer, data: factsBytes},
 		&fakePointerResolver{pointer: pointer},
 		publicKey,
+		opts...,
 	)
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
 	service.now = func() time.Time { return time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC) }
 	return service
+}
+
+func newCredentialTestService(t *testing.T, publicKey ed25519.PublicKey, privateKey ed25519.PrivateKey, credentials []agentfacts.CapabilityCredential, issuerPublicKey ed25519.PublicKey) *Service {
+	t.Helper()
+
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
+	verifier := testTrustVerifier(t, issuerPublicKey)
+	return newTestServiceWithOptions(t, publicKey, record, pointer, testFactsBytesWithCredentials(t, credentials), WithTrustVerifier(verifier))
 }
 
 func testRecord(t *testing.T, agentID string, factsPtrHash [16]byte, privateKey ed25519.PrivateKey) agentaddr.AgentAddr120 {
@@ -276,6 +410,79 @@ func testFactsBytes(t *testing.T, endpoints []agentfacts.Endpoint) []byte {
 		t.Fatalf("marshal facts: %v", err)
 	}
 	return factsBytes
+}
+
+func testFactsBytesWithCredentials(t *testing.T, credentials []agentfacts.CapabilityCredential) []byte {
+	t.Helper()
+
+	validFrom := time.Date(2026, 5, 31, 11, 0, 0, 0, time.UTC)
+	validUntil := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	factsBytes, err := json.Marshal(agentfacts.AgentFacts{
+		SchemaVersion: agentfacts.SchemaVersionV0,
+		ID:            "agent.example",
+		Controller:    "did:example:controller",
+		ValidFrom:     validFrom,
+		ValidUntil:    validUntil,
+		Capabilities:  []string{"chat"},
+		Credentials:   credentials,
+		Endpoints: []agentfacts.Endpoint{
+			testEndpoint("static", agentfacts.EndpointTypeStatic),
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal facts: %v", err)
+	}
+	return factsBytes
+}
+
+func testCapabilityCredential() agentfacts.CapabilityCredential {
+	return agentfacts.CapabilityCredential{
+		ID:           "credential-1",
+		Type:         agentfacts.AgentCapabilityCredential,
+		Issuer:       "did:example:issuer",
+		Subject:      "agent.example",
+		Capabilities: []string{"chat", "status"},
+		ValidFrom:    time.Date(2026, 5, 31, 11, 0, 0, 0, time.UTC),
+		ValidUntil:   time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+func signCredential(t *testing.T, credential *agentfacts.CapabilityCredential, privateKey ed25519.PrivateKey) {
+	t.Helper()
+
+	payload, err := json.Marshal(credentialSigningPayload{
+		ID:           credential.ID,
+		Type:         credential.Type,
+		Issuer:       credential.Issuer,
+		Subject:      credential.Subject,
+		Capabilities: credential.Capabilities,
+		ValidFrom:    credential.ValidFrom,
+		ValidUntil:   credential.ValidUntil,
+	})
+	if err != nil {
+		t.Fatalf("marshal credential signing payload: %v", err)
+	}
+	credential.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, payload))
+}
+
+type credentialSigningPayload struct {
+	ID           string    `json:"id"`
+	Type         string    `json:"type"`
+	Issuer       string    `json:"issuer"`
+	Subject      string    `json:"subject"`
+	Capabilities []string  `json:"capabilities"`
+	ValidFrom    time.Time `json:"validFrom"`
+	ValidUntil   time.Time `json:"validUntil"`
+}
+
+func testTrustVerifier(t *testing.T, issuerPublicKey ed25519.PublicKey) *trust.Verifier {
+	t.Helper()
+
+	verifier, err := trust.NewVerifier(trust.IssuerAllowlist{"did:example:issuer": issuerPublicKey})
+	if err != nil {
+		t.Fatalf("new trust verifier: %v", err)
+	}
+	return verifier
 }
 
 func testEndpoint(id string, endpointType string) agentfacts.Endpoint {

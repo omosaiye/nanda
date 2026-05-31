@@ -16,6 +16,7 @@ import (
 
 const (
 	TrustDecisionUnverifiedV0      = "unverified-v0"
+	TrustDecisionVerifiedV0        = "verified-v0"
 	CredentialStatusNotImplemented = "not-implemented-v0"
 )
 
@@ -27,6 +28,7 @@ var (
 	ErrMissingFactsStore      = errors.New("resolver service requires a facts store")
 	ErrMissingPointerResolver = errors.New("resolver service requires a facts pointer resolver")
 	ErrNoEndpoint             = errors.New("no endpoint available")
+	ErrTrustDenied            = errors.New("resolve trust denied")
 )
 
 type ValidationError struct {
@@ -73,11 +75,18 @@ type FactsPointerResolver interface {
 	ResolveFactsPointer(ctx context.Context, factsPtrHash128 [16]byte) (facts.FactsPointer, error)
 }
 
+type TrustVerifier interface {
+	VerifyCapability(credentials []agentfacts.CapabilityCredential, requestedAgentID string, requiredCapability string, now time.Time) error
+}
+
+type Option func(*Service)
+
 type Service struct {
 	indexStore      index.LeanIndexStore
 	factsStore      facts.FactsStore
 	pointerResolver FactsPointerResolver
 	publicKey       ed25519.PublicKey
+	trustVerifier   TrustVerifier
 	now             func() time.Time
 }
 
@@ -98,9 +107,16 @@ type ProofBundle struct {
 	AgentFactsPointerHashVerified bool   `json:"agentFactsPointerHashVerified"`
 	AgentFactsSchemaVerified      bool   `json:"agentFactsSchemaVerified"`
 	CredentialStatus              string `json:"credentialStatus"`
+	CapabilityCredentialVerified  bool   `json:"capabilityCredentialVerified"`
 }
 
-func NewService(indexStore index.LeanIndexStore, factsStore facts.FactsStore, pointerResolver FactsPointerResolver, publicKey ed25519.PublicKey) (*Service, error) {
+func WithTrustVerifier(verifier TrustVerifier) Option {
+	return func(s *Service) {
+		s.trustVerifier = verifier
+	}
+}
+
+func NewService(indexStore index.LeanIndexStore, factsStore facts.FactsStore, pointerResolver FactsPointerResolver, publicKey ed25519.PublicKey, opts ...Option) (*Service, error) {
 	if indexStore == nil {
 		return nil, ErrMissingIndexStore
 	}
@@ -114,13 +130,18 @@ func NewService(indexStore index.LeanIndexStore, factsStore facts.FactsStore, po
 		return nil, agentaddr.ErrInvalidPublicKey
 	}
 
-	return &Service{
+	service := &Service{
 		indexStore:      indexStore,
 		factsStore:      factsStore,
 		pointerResolver: pointerResolver,
 		publicKey:       publicKey,
 		now:             time.Now,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(service)
+	}
+
+	return service, nil
 }
 
 func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveResponse, error) {
@@ -179,6 +200,19 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 		return ResolveResponse{}, ValidationError{Field: "agentFacts", Err: err}
 	}
 
+	trustDecision := TrustDecisionUnverifiedV0
+	capabilityCredentialVerified := false
+	if req.RequiredCapability != "" {
+		if s.trustVerifier == nil {
+			return ResolveResponse{}, fmt.Errorf("%w: trust verifier is not configured", ErrTrustDenied)
+		}
+		if err := s.trustVerifier.VerifyCapability(decodedFacts.Credentials, agentID, req.RequiredCapability, s.now()); err != nil {
+			return ResolveResponse{}, fmt.Errorf("%w: %v", ErrTrustDenied, err)
+		}
+		trustDecision = TrustDecisionVerifiedV0
+		capabilityCredentialVerified = true
+	}
+
 	endpoint, ok := selectEndpoint(decodedFacts)
 	if !ok {
 		return ResolveResponse{}, ValidationError{Field: "endpoints", Err: ErrNoEndpoint}
@@ -187,12 +221,13 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 	return ResolveResponse{
 		AgentID:       agentID,
 		Endpoint:      endpoint,
-		TrustDecision: TrustDecisionUnverifiedV0,
+		TrustDecision: trustDecision,
 		ProofBundle: ProofBundle{
 			AgentAddrSignatureVerified:    true,
 			AgentFactsPointerHashVerified: true,
 			AgentFactsSchemaVerified:      true,
 			CredentialStatus:              CredentialStatusNotImplemented,
+			CapabilityCredentialVerified:  capabilityCredentialVerified,
 		},
 	}, nil
 }

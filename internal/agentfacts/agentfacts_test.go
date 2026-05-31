@@ -60,6 +60,42 @@ func TestAgentFactsJSONShapeUsesFlatEndpoints(t *testing.T) {
 	}
 }
 
+func TestAgentFactsJSONIncludesCredentials(t *testing.T) {
+	facts := validFacts()
+	facts.Credentials = []CapabilityCredential{
+		{
+			ID:           "credential-1",
+			Type:         AgentCapabilityCredential,
+			Issuer:       "did:example:issuer",
+			Subject:      "agent.example",
+			Capabilities: []string{"chat"},
+			ValidFrom:    testNow().Add(-time.Minute),
+			ValidUntil:   testNow().Add(time.Hour),
+			Signature:    "c2lnbmF0dXJl",
+		},
+	}
+
+	factsBytes, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatalf("marshal facts: %v", err)
+	}
+
+	var decoded AgentFacts
+	if err := json.Unmarshal(factsBytes, &decoded); err != nil {
+		t.Fatalf("unmarshal facts: %v", err)
+	}
+	if len(decoded.Credentials) != 1 {
+		t.Fatalf("credentials len = %d, want 1", len(decoded.Credentials))
+	}
+	credential := decoded.Credentials[0]
+	if credential.Type != AgentCapabilityCredential {
+		t.Fatalf("credential type = %q, want %q", credential.Type, AgentCapabilityCredential)
+	}
+	if credential.Subject != "agent.example" {
+		t.Fatalf("credential subject = %q, want agent.example", credential.Subject)
+	}
+}
+
 func TestValidateWrongSchemaVersionFails(t *testing.T) {
 	facts := validFacts()
 	facts.SchemaVersion = "nanda.agentfacts.v1"

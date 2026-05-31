@@ -100,6 +100,22 @@ func TestResolveAgentHandlerNotFound(t *testing.T) {
 	}
 }
 
+func TestResolveAgentHandlerTrustDenied(t *testing.T) {
+	service := &fakeResolverService{err: resolver.ErrTrustDenied}
+	handler := ResolveAgentHandler(service)
+	req := httptest.NewRequest(http.MethodPost, "/v1/resolve", strings.NewReader(`{
+		"agentId": "agent.example",
+		"requiredCapability": "chat"
+	}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
 func TestResolveAgentHandlerRejectsNonPost(t *testing.T) {
 	handler := ResolveAgentHandler(&fakeResolverService{})
 	req := httptest.NewRequest(http.MethodGet, "/v1/resolve", nil)

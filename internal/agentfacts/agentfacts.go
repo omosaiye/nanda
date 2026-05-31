@@ -16,6 +16,8 @@ var ErrValidation = errors.New("agent facts validation failed")
 const (
 	SchemaVersionV0 = "nanda.agentfacts.v0"
 
+	AgentCapabilityCredential = "AgentCapabilityCredential"
+
 	EndpointTypeStatic           = "static"
 	EndpointTypeRotating         = "rotating"
 	EndpointTypeAdaptiveResolver = "adaptiveResolver"
@@ -57,13 +59,25 @@ func (e ValidationError) Is(target error) bool {
 }
 
 type AgentFacts struct {
-	SchemaVersion string     `json:"schemaVersion"`
-	ID            string     `json:"id"`
-	Controller    string     `json:"controller"`
-	ValidFrom     time.Time  `json:"validFrom"`
-	ValidUntil    time.Time  `json:"validUntil"`
-	Capabilities  []string   `json:"capabilities"`
-	Endpoints     []Endpoint `json:"endpoints"`
+	SchemaVersion string                 `json:"schemaVersion"`
+	ID            string                 `json:"id"`
+	Controller    string                 `json:"controller"`
+	ValidFrom     time.Time              `json:"validFrom"`
+	ValidUntil    time.Time              `json:"validUntil"`
+	Capabilities  []string               `json:"capabilities"`
+	Credentials   []CapabilityCredential `json:"credentials,omitempty"`
+	Endpoints     []Endpoint             `json:"endpoints"`
+}
+
+type CapabilityCredential struct {
+	ID           string    `json:"id"`
+	Type         string    `json:"type"`
+	Issuer       string    `json:"issuer"`
+	Subject      string    `json:"subject"`
+	Capabilities []string  `json:"capabilities"`
+	ValidFrom    time.Time `json:"validFrom"`
+	ValidUntil   time.Time `json:"validUntil"`
+	Signature    string    `json:"signature"`
 }
 
 type Endpoint struct {
