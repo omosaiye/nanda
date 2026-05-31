@@ -77,7 +77,7 @@ type FactsPointerResolver interface {
 }
 
 type TrustVerifier interface {
-	VerifyCapability(credentials []agentfacts.CapabilityCredential, requestedAgentID string, requiredCapability string, now time.Time) error
+	VerifyCapability(ctx context.Context, credentials []agentfacts.CapabilityCredential, requestedAgentID string, requiredCapability string, now time.Time) error
 }
 
 type Option func(*Service)
@@ -229,8 +229,8 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 			resolveErr := fmt.Errorf("%w: trust verifier is not configured", ErrTrustDenied)
 			return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventTrustDenied, resolveErr)
 		}
-		if err := s.trustVerifier.VerifyCapability(decodedFacts.Credentials, agentID, req.RequiredCapability, s.now()); err != nil {
-			resolveErr := fmt.Errorf("%w: %v", ErrTrustDenied, err)
+		if err := s.trustVerifier.VerifyCapability(ctx, decodedFacts.Credentials, agentID, req.RequiredCapability, s.now()); err != nil {
+			resolveErr := fmt.Errorf("%w: %w", ErrTrustDenied, err)
 			return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventTrustDenied, resolveErr)
 		}
 		trustDecision = TrustDecisionVerifiedV0

@@ -1,12 +1,14 @@
 package trust
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/solai/nanda/internal/agentaddr"
@@ -16,6 +18,7 @@ import (
 var (
 	ErrDenied                    = errors.New("credential trust denied")
 	ErrMissingCredential         = errors.New("no credential grants required capability")
+	ErrMissingCredentialID       = errors.New("credential id is empty")
 	ErrUnsupportedCredentialType = errors.New("credential type is unsupported")
 	ErrUntrustedIssuer           = errors.New("credential issuer is not allowlisted")
 	ErrSubjectMismatch           = errors.New("credential subject does not match requested agent id")
@@ -24,15 +27,31 @@ var (
 	ErrMissingRequiredCapability = errors.New("credential missing required capability")
 	ErrInvalidSignatureEncoding  = errors.New("credential signature is not valid base64")
 	ErrInvalidSignature          = errors.New("credential signature is invalid")
+	ErrCredentialRevoked         = errors.New("credential is revoked")
 )
 
 type IssuerAllowlist map[string]ed25519.PublicKey
 
-type Verifier struct {
-	issuers IssuerAllowlist
+// RevocationChecker is the v0 local revocation hook for capability credentials.
+// It is intentionally not a full W3C VC Status List implementation.
+type RevocationChecker interface {
+	IsRevoked(ctx context.Context, issuer string, credentialID string) (bool, error)
 }
 
-func NewVerifier(issuers IssuerAllowlist) (*Verifier, error) {
+type Option func(*Verifier)
+
+type Verifier struct {
+	issuers           IssuerAllowlist
+	revocationChecker RevocationChecker
+}
+
+func WithRevocationChecker(checker RevocationChecker) Option {
+	return func(v *Verifier) {
+		v.revocationChecker = checker
+	}
+}
+
+func NewVerifier(issuers IssuerAllowlist, opts ...Option) (*Verifier, error) {
 	copied := make(IssuerAllowlist, len(issuers))
 	for issuer, publicKey := range issuers {
 		if len(publicKey) != ed25519.PublicKeySize {
@@ -41,13 +60,18 @@ func NewVerifier(issuers IssuerAllowlist) (*Verifier, error) {
 		copied[issuer] = append(ed25519.PublicKey(nil), publicKey...)
 	}
 
-	return &Verifier{issuers: copied}, nil
+	verifier := &Verifier{issuers: copied}
+	for _, opt := range opts {
+		opt(verifier)
+	}
+
+	return verifier, nil
 }
 
-func (v *Verifier) VerifyCapability(credentials []agentfacts.CapabilityCredential, requestedAgentID string, requiredCapability string, now time.Time) error {
+func (v *Verifier) VerifyCapability(ctx context.Context, credentials []agentfacts.CapabilityCredential, requestedAgentID string, requiredCapability string, now time.Time) error {
 	var lastErr error
 	for _, credential := range credentials {
-		if err := v.verifyCredential(credential, requestedAgentID, requiredCapability, now); err != nil {
+		if err := v.verifyCredential(ctx, credential, requestedAgentID, requiredCapability, now); err != nil {
 			lastErr = err
 			continue
 		}
@@ -60,9 +84,12 @@ func (v *Verifier) VerifyCapability(credentials []agentfacts.CapabilityCredentia
 	return VerificationError{Err: ErrMissingCredential}
 }
 
-func (v *Verifier) verifyCredential(credential agentfacts.CapabilityCredential, requestedAgentID string, requiredCapability string, now time.Time) error {
+func (v *Verifier) verifyCredential(ctx context.Context, credential agentfacts.CapabilityCredential, requestedAgentID string, requiredCapability string, now time.Time) error {
 	if credential.Type != agentfacts.AgentCapabilityCredential {
 		return ErrUnsupportedCredentialType
+	}
+	if strings.TrimSpace(credential.ID) == "" {
+		return ErrMissingCredentialID
 	}
 	publicKey, ok := v.issuers[credential.Issuer]
 	if !ok {
@@ -98,6 +125,15 @@ func (v *Verifier) verifyCredential(credential agentfacts.CapabilityCredential, 
 	}
 	if !ed25519.Verify(publicKey, payload, signature) {
 		return ErrInvalidSignature
+	}
+	if v.revocationChecker != nil {
+		revoked, err := v.revocationChecker.IsRevoked(ctx, credential.Issuer, credential.ID)
+		if err != nil {
+			return err
+		}
+		if revoked {
+			return ErrCredentialRevoked
+		}
 	}
 
 	return nil

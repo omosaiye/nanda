@@ -14,6 +14,7 @@ import (
 	"github.com/solai/nanda/internal/audit"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
+	"github.com/solai/nanda/internal/revocation"
 	"github.com/solai/nanda/internal/trust"
 )
 
@@ -145,6 +146,60 @@ func TestServiceResolveTrustDenialWritesAuditEvent(t *testing.T) {
 	})
 	if !errors.Is(err, ErrTrustDenied) {
 		t.Fatalf("resolve error = %v, want trust denied", err)
+	}
+
+	events := requireAuditEvents(t, auditStore, 1)
+	event := events[0]
+	if event.EventType != audit.EventTrustDenied {
+		t.Fatalf("event type = %q, want %q", event.EventType, audit.EventTrustDenied)
+	}
+	if event.Decision != audit.DecisionDenied {
+		t.Fatalf("decision = %q, want %q", event.Decision, audit.DecisionDenied)
+	}
+	if event.Reason == "" {
+		t.Fatal("trust denial audit event reason is empty")
+	}
+}
+
+func TestServiceResolveRequiredCapabilityWithRevokedCredentialFailsAndWritesAuditEvent(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	signCredential(t, &credential, issuerPrivateKey)
+	revocationStore := revocation.NewMemoryStore()
+	if err := revocationStore.SetStatus(context.Background(), credential.Issuer, credential.ID, revocation.StatusRevoked, "compromised"); err != nil {
+		t.Fatalf("set revoked: %v", err)
+	}
+	verifier, err := trust.NewVerifier(
+		trust.IssuerAllowlist{"did:example:issuer": issuerPublicKey},
+		trust.WithRevocationChecker(revocationStore),
+	)
+	if err != nil {
+		t.Fatalf("new trust verifier: %v", err)
+	}
+
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
+	auditStore := audit.NewMemoryStore()
+	service := newTestServiceWithOptions(
+		t,
+		publicKey,
+		record,
+		pointer,
+		testFactsBytesWithCredentials(t, []agentfacts.CapabilityCredential{credential}),
+		WithTrustVerifier(verifier),
+		WithAuditStore(auditStore),
+	)
+
+	_, err = service.Resolve(context.Background(), ResolveRequest{
+		AgentID:            "agent.example",
+		RequiredCapability: "chat",
+	})
+	if !errors.Is(err, ErrTrustDenied) {
+		t.Fatalf("resolve error = %v, want trust denied", err)
+	}
+	if !errors.Is(err, trust.ErrCredentialRevoked) {
+		t.Fatalf("resolve error = %v, want credential revoked", err)
 	}
 
 	events := requireAuditEvents(t, auditStore, 1)

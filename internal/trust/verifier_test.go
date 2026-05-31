@@ -1,6 +1,7 @@
 package trust
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/solai/nanda/internal/agentfacts"
+	"github.com/solai/nanda/internal/revocation"
 )
 
 func TestVerifierVerifyCapabilitySuccess(t *testing.T) {
@@ -16,7 +18,7 @@ func TestVerifierVerifyCapabilitySuccess(t *testing.T) {
 	signCredential(t, &credential, privateKey)
 	verifier := testVerifier(t, publicKey)
 
-	if err := verifier.VerifyCapability([]agentfacts.CapabilityCredential{credential}, " Agent.Example ", "chat", testNow()); err != nil {
+	if err := verifier.VerifyCapability(context.Background(), []agentfacts.CapabilityCredential{credential}, " Agent.Example ", "chat", testNow()); err != nil {
 		t.Fatalf("verify capability: %v", err)
 	}
 }
@@ -28,12 +30,28 @@ func TestVerifierRejectsBadSignature(t *testing.T) {
 	signCredential(t, &credential, privateKey)
 	verifier := testVerifier(t, publicKey)
 
-	err := verifier.VerifyCapability([]agentfacts.CapabilityCredential{credential}, "agent.example", "chat", testNow())
+	err := verifier.VerifyCapability(context.Background(), []agentfacts.CapabilityCredential{credential}, "agent.example", "chat", testNow())
 	if !errors.Is(err, ErrInvalidSignature) {
 		t.Fatalf("verify error = %v, want %v", err, ErrInvalidSignature)
 	}
 	if !errors.Is(err, ErrDenied) {
 		t.Fatalf("verify error = %v, want %v", err, ErrDenied)
+	}
+}
+
+func TestVerifierRejectsMissingCredentialID(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	credential := testCredential()
+	credential.ID = " \t\n "
+	signCredential(t, &credential, privateKey)
+	verifier := testVerifier(t, publicKey)
+
+	err := verifier.VerifyCapability(context.Background(), []agentfacts.CapabilityCredential{credential}, "agent.example", "chat", testNow())
+	if !errors.Is(err, ErrDenied) {
+		t.Fatalf("verify error = %v, want %v", err, ErrDenied)
+	}
+	if !errors.Is(err, ErrMissingCredentialID) {
+		t.Fatalf("verify error = %v, want %v", err, ErrMissingCredentialID)
 	}
 }
 
@@ -144,7 +162,7 @@ func TestVerifierDenialReasons(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			verifier := testVerifier(t, publicKey)
 
-			err := verifier.VerifyCapability(tt.credentials(), tt.requestedAgentID, tt.requiredCapability, testNow())
+			err := verifier.VerifyCapability(context.Background(), tt.credentials(), tt.requestedAgentID, tt.requiredCapability, testNow())
 			if !errors.Is(err, ErrDenied) {
 				t.Fatalf("verify error = %v, want %v", err, ErrDenied)
 			}
@@ -152,6 +170,28 @@ func TestVerifierDenialReasons(t *testing.T) {
 				t.Fatalf("verify error = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestVerifierRejectsRevokedCredential(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	credential := testCredential()
+	signCredential(t, &credential, privateKey)
+	store := revocation.NewMemoryStore()
+	if err := store.SetStatus(context.Background(), credential.Issuer, credential.ID, revocation.StatusRevoked, "compromised"); err != nil {
+		t.Fatalf("set revoked: %v", err)
+	}
+	verifier, err := NewVerifier(IssuerAllowlist{"did:example:issuer": publicKey}, WithRevocationChecker(store))
+	if err != nil {
+		t.Fatalf("new verifier: %v", err)
+	}
+
+	err = verifier.VerifyCapability(context.Background(), []agentfacts.CapabilityCredential{credential}, "agent.example", "chat", testNow())
+	if !errors.Is(err, ErrDenied) {
+		t.Fatalf("verify error = %v, want %v", err, ErrDenied)
+	}
+	if !errors.Is(err, ErrCredentialRevoked) {
+		t.Fatalf("verify error = %v, want %v", err, ErrCredentialRevoked)
 	}
 }
 
