@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/solai/nanda/internal/agentaddr"
 )
 
 func TestValidateValidFactsPasses(t *testing.T) {
@@ -93,6 +95,93 @@ func TestAgentFactsJSONIncludesCredentials(t *testing.T) {
 	}
 	if credential.Subject != "agent.example" {
 		t.Fatalf("credential subject = %q, want agent.example", credential.Subject)
+	}
+}
+
+func TestCredentialSetHash128Deterministic(t *testing.T) {
+	credentials := []CapabilityCredential{testCredential("credential-1", "signature-1")}
+
+	first, err := CredentialSetHash128(credentials)
+	if err != nil {
+		t.Fatalf("credential set hash first: %v", err)
+	}
+	second, err := CredentialSetHash128(credentials)
+	if err != nil {
+		t.Fatalf("credential set hash second: %v", err)
+	}
+	if first != second {
+		t.Fatalf("credential set hash changed: first=%x second=%x", first, second)
+	}
+}
+
+func TestCredentialSetHash128OrderInsensitive(t *testing.T) {
+	first, err := CredentialSetHash128([]CapabilityCredential{
+		testCredential("credential-1", "signature-1"),
+		testCredential("credential-2", "signature-2"),
+	})
+	if err != nil {
+		t.Fatalf("credential set hash first: %v", err)
+	}
+	second, err := CredentialSetHash128([]CapabilityCredential{
+		testCredential("credential-2", "signature-2"),
+		testCredential("credential-1", "signature-1"),
+	})
+	if err != nil {
+		t.Fatalf("credential set hash second: %v", err)
+	}
+	if first != second {
+		t.Fatalf("credential set hash depends on credential order: first=%x second=%x", first, second)
+	}
+}
+
+func TestCredentialSetHash128CapabilityOrderInsensitive(t *testing.T) {
+	firstCredential := testCredential("credential-1", "signature-1")
+	firstCredential.Capabilities = []string{"chat", "status"}
+	secondCredential := testCredential("credential-1", "signature-1")
+	secondCredential.Capabilities = []string{"status", "chat"}
+
+	first, err := CredentialSetHash128([]CapabilityCredential{firstCredential})
+	if err != nil {
+		t.Fatalf("credential set hash first: %v", err)
+	}
+	second, err := CredentialSetHash128([]CapabilityCredential{secondCredential})
+	if err != nil {
+		t.Fatalf("credential set hash second: %v", err)
+	}
+	if first != second {
+		t.Fatalf("credential set hash depends on capability order: first=%x second=%x", first, second)
+	}
+}
+
+func TestCredentialSetHash128SignatureChangesHash(t *testing.T) {
+	first, err := CredentialSetHash128([]CapabilityCredential{testCredential("credential-1", "signature-1")})
+	if err != nil {
+		t.Fatalf("credential set hash first: %v", err)
+	}
+	second, err := CredentialSetHash128([]CapabilityCredential{testCredential("credential-1", "signature-2")})
+	if err != nil {
+		t.Fatalf("credential set hash second: %v", err)
+	}
+	if first == second {
+		t.Fatal("credential set hash did not change after signature changed")
+	}
+}
+
+func TestCredentialSetHash128EmptySetDeterministic(t *testing.T) {
+	first, err := CredentialSetHash128(nil)
+	if err != nil {
+		t.Fatalf("credential set hash nil: %v", err)
+	}
+	second, err := CredentialSetHash128([]CapabilityCredential{})
+	if err != nil {
+		t.Fatalf("credential set hash empty: %v", err)
+	}
+	want := agentaddr.Hash128([]byte{})
+	if first != second {
+		t.Fatalf("empty credential set hash changed: first=%x second=%x", first, second)
+	}
+	if first != want {
+		t.Fatalf("empty credential set hash = %x, want %x", first, want)
 	}
 }
 
@@ -257,6 +346,19 @@ func validFacts() AgentFacts {
 				TTLSeconds: 60,
 			},
 		},
+	}
+}
+
+func testCredential(id string, signature string) CapabilityCredential {
+	return CapabilityCredential{
+		ID:           id,
+		Type:         AgentCapabilityCredential,
+		Issuer:       "did:example:issuer",
+		Subject:      "agent.example",
+		Capabilities: []string{"status", "chat"},
+		ValidFrom:    testNow().Add(-time.Minute),
+		ValidUntil:   testNow().Add(time.Hour),
+		Signature:    signature,
 	}
 }
 

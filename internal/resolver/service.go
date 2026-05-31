@@ -108,6 +108,7 @@ type ProofBundle struct {
 	AgentAddrSignatureVerified    bool   `json:"agentAddrSignatureVerified"`
 	AgentFactsPointerHashVerified bool   `json:"agentFactsPointerHashVerified"`
 	AgentFactsSchemaVerified      bool   `json:"agentFactsSchemaVerified"`
+	CredentialSetVerified         bool   `json:"credentialSetVerified"`
 	CredentialStatus              string `json:"credentialStatus"`
 	CapabilityCredentialVerified  bool   `json:"capabilityCredentialVerified"`
 }
@@ -221,6 +222,15 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 		resolveErr := ValidationError{Field: "agentFacts", Err: err}
 		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
 	}
+	credentialSet128, err := agentfacts.CredentialSetHash128(decodedFacts.Credentials)
+	if err != nil {
+		resolveErr := VerificationError{Step: "credential set", Err: err}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
+	}
+	if credentialSet128 != payload.CredentialSet128 {
+		resolveErr := VerificationError{Step: "credential set", Err: errors.New("credential set hash does not match agent address payload")}
+		return ResolveResponse{}, s.auditResolveFailure(ctx, req, agentID, agentHashHex, audit.EventResolveDenied, resolveErr)
+	}
 
 	trustDecision := TrustDecisionUnverifiedV0
 	capabilityCredentialVerified := false
@@ -251,6 +261,7 @@ func (s *Service) Resolve(ctx context.Context, req ResolveRequest) (ResolveRespo
 			AgentAddrSignatureVerified:    true,
 			AgentFactsPointerHashVerified: true,
 			AgentFactsSchemaVerified:      true,
+			CredentialSetVerified:         true,
 			CredentialStatus:              CredentialStatusNotImplemented,
 			CapabilityCredentialVerified:  capabilityCredentialVerified,
 		},

@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/solai/nanda/internal/agentaddr"
+	"github.com/solai/nanda/internal/agentfacts"
 	"github.com/solai/nanda/internal/audit"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
@@ -121,8 +122,14 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (RegisterRe
 	}
 
 	factsPtrHash128 := facts.PointerHash128(pointer)
-	// Placeholder until v0 credential extraction and VC verification are introduced.
-	credentialSet128 := agentaddr.Hash128([]byte{})
+	var decodedFacts agentfacts.AgentFacts
+	if err := json.Unmarshal(req.Facts, &decodedFacts); err != nil {
+		return RegisterResponse{}, ValidationError{Field: "facts", Err: fmt.Errorf("invalid JSON: %w", err)}
+	}
+	credentialSet128, err := agentfacts.CredentialSetHash128(decodedFacts.Credentials)
+	if err != nil {
+		return RegisterResponse{}, ValidationError{Field: "facts.credentials", Err: err}
+	}
 
 	payload, err := agentaddr.New(agentID, req.TTLSeconds, req.Flags, req.Sequence, factsPtrHash128, credentialSet128)
 	if err != nil {

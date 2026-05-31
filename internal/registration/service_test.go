@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/solai/nanda/internal/agentaddr"
+	"github.com/solai/nanda/internal/agentfacts"
 	"github.com/solai/nanda/internal/audit"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
@@ -78,6 +80,41 @@ func TestServiceRegisterSuccess(t *testing.T) {
 	wantCredentialSet := agentaddr.Hash128([]byte{})
 	if record.Payload().CredentialSet128 != wantCredentialSet {
 		t.Fatalf("record credential set = %x, want %x", record.Payload().CredentialSet128, wantCredentialSet)
+	}
+	if resp.CredentialSet128 != hex.EncodeToString(wantCredentialSet[:]) {
+		t.Fatalf("response credential set = %q, want %x", resp.CredentialSet128, wantCredentialSet)
+	}
+}
+
+func TestServiceRegisterCommitsCredentialSet128(t *testing.T) {
+	_, privateKey := testKeyPair(t)
+	factsStore := &fakeFactsStore{
+		pointer: facts.FactsPointer{Scheme: "fs", Path: "ab/cd/agent.facts"},
+	}
+	indexStore := &fakeIndexStore{}
+	service := newTestService(t, factsStore, indexStore, privateKey)
+	credentials := []agentfacts.CapabilityCredential{
+		testCapabilityCredential("credential-1", "signature-1"),
+		testCapabilityCredential("credential-2", "signature-2"),
+	}
+	factsBytes := testAgentFactsBytes(t, credentials)
+
+	resp, err := service.Register(context.Background(), RegisterRequest{
+		AgentID:    "agent.example",
+		TTLSeconds: 300,
+		Sequence:   1,
+		Facts:      factsBytes,
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	wantCredentialSet, err := agentfacts.CredentialSetHash128(credentials)
+	if err != nil {
+		t.Fatalf("credential set hash: %v", err)
+	}
+	if indexStore.record.Payload().CredentialSet128 != wantCredentialSet {
+		t.Fatalf("record credential set = %x, want %x", indexStore.record.Payload().CredentialSet128, wantCredentialSet)
 	}
 	if resp.CredentialSet128 != hex.EncodeToString(wantCredentialSet[:]) {
 		t.Fatalf("response credential set = %q, want %x", resp.CredentialSet128, wantCredentialSet)
@@ -277,4 +314,46 @@ func testPrivateKey(t *testing.T) ed25519.PrivateKey {
 
 	_, privateKey := testKeyPair(t)
 	return privateKey
+}
+
+func testAgentFactsBytes(t *testing.T, credentials []agentfacts.CapabilityCredential) json.RawMessage {
+	t.Helper()
+
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	factsBytes, err := json.Marshal(agentfacts.AgentFacts{
+		SchemaVersion: agentfacts.SchemaVersionV0,
+		ID:            "agent.example",
+		Controller:    "did:example:controller",
+		ValidFrom:     now.Add(-time.Minute),
+		ValidUntil:    now.Add(time.Hour),
+		Capabilities:  []string{"chat"},
+		Credentials:   credentials,
+		Endpoints: []agentfacts.Endpoint{
+			{
+				ID:         "primary",
+				Type:       agentfacts.EndpointTypeStatic,
+				URL:        "https://agent.example/endpoint",
+				Protocol:   "https",
+				TTLSeconds: 60,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal facts: %v", err)
+	}
+	return factsBytes
+}
+
+func testCapabilityCredential(id string, signature string) agentfacts.CapabilityCredential {
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	return agentfacts.CapabilityCredential{
+		ID:           id,
+		Type:         agentfacts.AgentCapabilityCredential,
+		Issuer:       "did:example:issuer",
+		Subject:      "agent.example",
+		Capabilities: []string{"chat", "status"},
+		ValidFrom:    now.Add(-time.Minute),
+		ValidUntil:   now.Add(time.Hour),
+		Signature:    signature,
+	}
 }

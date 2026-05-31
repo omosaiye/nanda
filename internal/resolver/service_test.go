@@ -51,6 +51,9 @@ func TestServiceResolveSuccess(t *testing.T) {
 	if !resp.ProofBundle.AgentFactsSchemaVerified {
 		t.Fatal("agent facts schema proof was not verified")
 	}
+	if !resp.ProofBundle.CredentialSetVerified {
+		t.Fatal("credential set proof was not verified")
+	}
 	if resp.ProofBundle.CredentialStatus != CredentialStatusNotImplemented {
 		t.Fatalf("credential status = %q, want %q", resp.ProofBundle.CredentialStatus, CredentialStatusNotImplemented)
 	}
@@ -89,9 +92,13 @@ func TestServiceResolveRequiredCapabilityWithValidCredential(t *testing.T) {
 	publicKey, privateKey := testKeyPair(t)
 	issuerPublicKey, issuerPrivateKey := testKeyPair(t)
 	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
-	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
 	credential := testCapabilityCredential()
 	signCredential(t, &credential, issuerPrivateKey)
+	credentialSet128, err := agentfacts.CredentialSetHash128([]agentfacts.CapabilityCredential{credential})
+	if err != nil {
+		t.Fatalf("credential set hash: %v", err)
+	}
+	record := testRecordWithCredentialSet(t, "agent.example", facts.PointerHash128(pointer), credentialSet128, privateKey)
 	verifier := testTrustVerifier(t, issuerPublicKey)
 	service := newTestServiceWithOptions(t, publicKey, record, pointer, testFactsBytesWithCredentials(t, []agentfacts.CapabilityCredential{credential}), WithTrustVerifier(verifier))
 
@@ -111,6 +118,49 @@ func TestServiceResolveRequiredCapabilityWithValidCredential(t *testing.T) {
 	}
 	if resp.ProofBundle.CredentialStatus != CredentialStatusNotImplemented {
 		t.Fatalf("credential status = %q, want %q", resp.ProofBundle.CredentialStatus, CredentialStatusNotImplemented)
+	}
+}
+
+func TestServiceResolveVerifiesCredentialSet128(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	credential.Signature = "signature-1"
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	credentialSet128, err := agentfacts.CredentialSetHash128([]agentfacts.CapabilityCredential{credential})
+	if err != nil {
+		t.Fatalf("credential set hash: %v", err)
+	}
+	record := testRecordWithCredentialSet(t, "agent.example", facts.PointerHash128(pointer), credentialSet128, privateKey)
+	service := newTestService(t, publicKey, record, pointer, testFactsBytesWithCredentials(t, []agentfacts.CapabilityCredential{credential}))
+
+	resp, err := service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !resp.ProofBundle.CredentialSetVerified {
+		t.Fatal("credential set proof was not verified")
+	}
+}
+
+func TestServiceResolveRejectsCredentialSetMismatch(t *testing.T) {
+	publicKey, privateKey := testKeyPair(t)
+	credential := testCapabilityCredential()
+	credential.Signature = "signature-1"
+	committedCredential := credential
+	committedHash, err := agentfacts.CredentialSetHash128([]agentfacts.CapabilityCredential{committedCredential})
+	if err != nil {
+		t.Fatalf("credential set hash: %v", err)
+	}
+	tamperedCredential := credential
+	tamperedCredential.Signature = "tampered-signature"
+
+	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
+	record := testRecordWithCredentialSet(t, "agent.example", facts.PointerHash128(pointer), committedHash, privateKey)
+	service := newTestService(t, publicKey, record, pointer, testFactsBytesWithCredentials(t, []agentfacts.CapabilityCredential{tamperedCredential}))
+
+	_, err = service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+	if !errors.Is(err, ErrVerification) {
+		t.Fatalf("resolve error = %v, want verification error", err)
 	}
 }
 
@@ -179,7 +229,11 @@ func TestServiceResolveRequiredCapabilityWithRevokedCredentialFailsAndWritesAudi
 	}
 
 	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
-	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
+	credentialSet128, err := agentfacts.CredentialSetHash128([]agentfacts.CapabilityCredential{credential})
+	if err != nil {
+		t.Fatalf("credential set hash: %v", err)
+	}
+	record := testRecordWithCredentialSet(t, "agent.example", facts.PointerHash128(pointer), credentialSet128, privateKey)
 	auditStore := audit.NewMemoryStore()
 	service := newTestServiceWithOptions(
 		t,
@@ -519,7 +573,11 @@ func newCredentialTestServiceWithOptions(t *testing.T, publicKey ed25519.PublicK
 	t.Helper()
 
 	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
-	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
+	credentialSet128, err := agentfacts.CredentialSetHash128(credentials)
+	if err != nil {
+		t.Fatalf("credential set hash: %v", err)
+	}
+	record := testRecordWithCredentialSet(t, "agent.example", facts.PointerHash128(pointer), credentialSet128, privateKey)
 	verifier := testTrustVerifier(t, issuerPublicKey)
 	opts = append(opts, WithTrustVerifier(verifier))
 	return newTestServiceWithOptions(t, publicKey, record, pointer, testFactsBytesWithCredentials(t, credentials), opts...)
@@ -528,7 +586,13 @@ func newCredentialTestServiceWithOptions(t *testing.T, publicKey ed25519.PublicK
 func testRecord(t *testing.T, agentID string, factsPtrHash [16]byte, privateKey ed25519.PrivateKey) agentaddr.AgentAddr120 {
 	t.Helper()
 
-	payload, err := agentaddr.New(agentID, 300, 0, 1, factsPtrHash, agentaddr.Hash128(nil))
+	return testRecordWithCredentialSet(t, agentID, factsPtrHash, agentaddr.Hash128(nil), privateKey)
+}
+
+func testRecordWithCredentialSet(t *testing.T, agentID string, factsPtrHash [16]byte, credentialSet128 [16]byte, privateKey ed25519.PrivateKey) agentaddr.AgentAddr120 {
+	t.Helper()
+
+	payload, err := agentaddr.New(agentID, 300, 0, 1, factsPtrHash, credentialSet128)
 	if err != nil {
 		t.Fatalf("new payload: %v", err)
 	}
