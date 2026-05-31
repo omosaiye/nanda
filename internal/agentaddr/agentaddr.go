@@ -2,10 +2,8 @@ package agentaddr
 
 import (
 	"crypto/ed25519"
-	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"io"
 )
 
 const (
@@ -14,12 +12,13 @@ const (
 	SignatureSize      = ed25519.SignatureSize
 	RecordSize         = PayloadSize + SignatureSize
 
-	versionOffset       = 0
-	ttlOffset           = 1
-	agentIDHashOffset   = 5
-	publicKeyHashOffset = 21
-	nonceOffset         = 37
-	nonceSize           = PayloadSize - nonceOffset
+	versionOffset          = 0
+	flagsOffset            = 1
+	ttlOffset              = 2
+	sequenceOffset         = 4
+	agentIDHashOffset      = 8
+	factsPtrHashOffset     = 24
+	credentialSet128Offset = 40
 )
 
 var (
@@ -37,19 +36,18 @@ type AgentAddr120 struct {
 }
 
 type Payload struct {
-	Version       byte
-	TTLSeconds    uint32
-	AgentIDHash   [16]byte
-	PublicKeyHash [16]byte
-	Nonce         [nonceSize]byte
+	Version          byte
+	Flags            byte
+	TTLSeconds       uint16
+	Sequence         uint32
+	AgentIDHash      [16]byte
+	FactsPtrHash128  [16]byte
+	CredentialSet128 [16]byte
 }
 
-func New(agentID string, ttlSeconds uint32, publicKey ed25519.PublicKey) (Payload, error) {
+func New(agentID string, ttlSeconds uint16, flags byte, sequence uint32, factsPtrHash128 [16]byte, credentialSet128 [16]byte) (Payload, error) {
 	if ttlSeconds == 0 {
 		return Payload{}, ErrZeroTTL
-	}
-	if len(publicKey) != ed25519.PublicKeySize {
-		return Payload{}, ErrInvalidPublicKey
 	}
 
 	agentIDHash, err := AgentIDHash(agentID)
@@ -57,17 +55,14 @@ func New(agentID string, ttlSeconds uint32, publicKey ed25519.PublicKey) (Payloa
 		return Payload{}, err
 	}
 
-	var nonce [nonceSize]byte
-	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
-		return Payload{}, err
-	}
-
 	return Payload{
-		Version:       Version1,
-		TTLSeconds:    ttlSeconds,
-		AgentIDHash:   agentIDHash,
-		PublicKeyHash: Hash128(publicKey),
-		Nonce:         nonce,
+		Version:          Version1,
+		Flags:            flags,
+		TTLSeconds:       ttlSeconds,
+		Sequence:         sequence,
+		AgentIDHash:      agentIDHash,
+		FactsPtrHash128:  factsPtrHash128,
+		CredentialSet128: credentialSet128,
 	}, nil
 }
 
@@ -120,9 +115,6 @@ func (a AgentAddr120) Verify(publicKey ed25519.PublicKey) error {
 	if len(publicKey) != ed25519.PublicKeySize {
 		return ErrInvalidPublicKey
 	}
-	if Hash128(publicKey) != a.Payload().PublicKeyHash {
-		return ErrInvalidPublicKey
-	}
 	if !ed25519.Verify(publicKey, a.payload[:], a.signature[:]) {
 		return ErrInvalidSignature
 	}
@@ -133,10 +125,12 @@ func (a AgentAddr120) Verify(publicKey ed25519.PublicKey) error {
 func encodePayload(payload Payload) ([PayloadSize]byte, error) {
 	var out [PayloadSize]byte
 	out[versionOffset] = payload.Version
-	binary.BigEndian.PutUint32(out[ttlOffset:agentIDHashOffset], payload.TTLSeconds)
-	copy(out[agentIDHashOffset:publicKeyHashOffset], payload.AgentIDHash[:])
-	copy(out[publicKeyHashOffset:nonceOffset], payload.PublicKeyHash[:])
-	copy(out[nonceOffset:], payload.Nonce[:])
+	out[flagsOffset] = payload.Flags
+	binary.BigEndian.PutUint16(out[ttlOffset:sequenceOffset], payload.TTLSeconds)
+	binary.BigEndian.PutUint32(out[sequenceOffset:agentIDHashOffset], payload.Sequence)
+	copy(out[agentIDHashOffset:factsPtrHashOffset], payload.AgentIDHash[:])
+	copy(out[factsPtrHashOffset:credentialSet128Offset], payload.FactsPtrHash128[:])
+	copy(out[credentialSet128Offset:], payload.CredentialSet128[:])
 
 	if err := validatePayloadBytes(out); err != nil {
 		return [PayloadSize]byte{}, err
@@ -148,10 +142,12 @@ func encodePayload(payload Payload) ([PayloadSize]byte, error) {
 func decodePayload(payload [PayloadSize]byte) Payload {
 	var out Payload
 	out.Version = payload[versionOffset]
-	out.TTLSeconds = binary.BigEndian.Uint32(payload[ttlOffset:agentIDHashOffset])
-	copy(out.AgentIDHash[:], payload[agentIDHashOffset:publicKeyHashOffset])
-	copy(out.PublicKeyHash[:], payload[publicKeyHashOffset:nonceOffset])
-	copy(out.Nonce[:], payload[nonceOffset:])
+	out.Flags = payload[flagsOffset]
+	out.TTLSeconds = binary.BigEndian.Uint16(payload[ttlOffset:sequenceOffset])
+	out.Sequence = binary.BigEndian.Uint32(payload[sequenceOffset:agentIDHashOffset])
+	copy(out.AgentIDHash[:], payload[agentIDHashOffset:factsPtrHashOffset])
+	copy(out.FactsPtrHash128[:], payload[factsPtrHashOffset:credentialSet128Offset])
+	copy(out.CredentialSet128[:], payload[credentialSet128Offset:])
 	return out
 }
 
@@ -159,7 +155,7 @@ func validatePayloadBytes(payload [PayloadSize]byte) error {
 	if payload[versionOffset] != Version1 {
 		return ErrUnsupportedVersion
 	}
-	if binary.BigEndian.Uint32(payload[ttlOffset:agentIDHashOffset]) == 0 {
+	if binary.BigEndian.Uint16(payload[ttlOffset:sequenceOffset]) == 0 {
 		return ErrZeroTTL
 	}
 

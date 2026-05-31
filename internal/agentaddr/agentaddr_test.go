@@ -8,8 +8,8 @@ import (
 )
 
 func TestAgentAddr120ExactLength(t *testing.T) {
-	publicKey, privateKey := testKeyPair(t)
-	payload := testPayload(t, publicKey)
+	_, privateKey := testKeyPair(t)
+	payload := testPayload(t)
 
 	record, err := Sign(payload, privateKey)
 	if err != nil {
@@ -22,6 +22,28 @@ func TestAgentAddr120ExactLength(t *testing.T) {
 	}
 	if len(encoded) != 120 {
 		t.Fatalf("record length = %d, want exactly 120", len(encoded))
+	}
+	if SignatureSize != 64 {
+		t.Fatalf("signature size = %d, want exactly 64", SignatureSize)
+	}
+}
+
+func TestAgentAddr120ExactPayloadLength(t *testing.T) {
+	_, privateKey := testKeyPair(t)
+	payload := testPayload(t)
+
+	record, err := Sign(payload, privateKey)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	encoded := record.Encode()
+	payloadBytes := encoded[:PayloadSize]
+	if len(payloadBytes) != PayloadSize {
+		t.Fatalf("payload length = %d, want %d", len(payloadBytes), PayloadSize)
+	}
+	if len(payloadBytes) != 56 {
+		t.Fatalf("payload length = %d, want exactly 56", len(payloadBytes))
 	}
 }
 
@@ -41,7 +63,7 @@ func TestDecodeRejectsLongRecord(t *testing.T) {
 
 func TestVerifyValidSignature(t *testing.T) {
 	publicKey, privateKey := testKeyPair(t)
-	payload := testPayload(t, publicKey)
+	payload := testPayload(t)
 
 	record, err := Sign(payload, privateKey)
 	if err != nil {
@@ -59,7 +81,7 @@ func TestVerifyValidSignature(t *testing.T) {
 
 func TestVerifyTamperedRecordFails(t *testing.T) {
 	publicKey, privateKey := testKeyPair(t)
-	payload := testPayload(t, publicKey)
+	payload := testPayload(t)
 
 	record, err := Sign(payload, privateKey)
 	if err != nil {
@@ -67,7 +89,7 @@ func TestVerifyTamperedRecordFails(t *testing.T) {
 	}
 
 	encoded := record.Encode()
-	encoded[nonceOffset] ^= 0xff
+	encoded[factsPtrHashOffset] ^= 0xff
 
 	decoded, err := Decode(encoded)
 	if err != nil {
@@ -79,8 +101,8 @@ func TestVerifyTamperedRecordFails(t *testing.T) {
 }
 
 func TestDecodeRejectsUnsupportedVersion(t *testing.T) {
-	publicKey, privateKey := testKeyPair(t)
-	payload := testPayload(t, publicKey)
+	_, privateKey := testKeyPair(t)
+	payload := testPayload(t)
 
 	record, err := Sign(payload, privateKey)
 	if err != nil {
@@ -97,8 +119,8 @@ func TestDecodeRejectsUnsupportedVersion(t *testing.T) {
 }
 
 func TestDecodeRejectsZeroTTL(t *testing.T) {
-	publicKey, privateKey := testKeyPair(t)
-	payload := testPayload(t, publicKey)
+	_, privateKey := testKeyPair(t)
+	payload := testPayload(t)
 
 	record, err := Sign(payload, privateKey)
 	if err != nil {
@@ -108,12 +130,36 @@ func TestDecodeRejectsZeroTTL(t *testing.T) {
 	encoded := record.Encode()
 	encoded[ttlOffset] = 0
 	encoded[ttlOffset+1] = 0
-	encoded[ttlOffset+2] = 0
-	encoded[ttlOffset+3] = 0
 
 	_, err = Decode(encoded)
 	if !errors.Is(err, ErrZeroTTL) {
 		t.Fatalf("decode zero ttl error = %v, want %v", err, ErrZeroTTL)
+	}
+}
+
+func TestPayloadFieldRoundTrip(t *testing.T) {
+	_, privateKey := testKeyPair(t)
+	payload := testPayload(t)
+
+	record, err := Sign(payload, privateKey)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+
+	decoded, err := Decode(record.Encode())
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	got := decoded.Payload()
+	if got.Sequence != payload.Sequence {
+		t.Fatalf("sequence = %d, want %d", got.Sequence, payload.Sequence)
+	}
+	if got.FactsPtrHash128 != payload.FactsPtrHash128 {
+		t.Fatalf("facts ptr hash = %x, want %x", got.FactsPtrHash128, payload.FactsPtrHash128)
+	}
+	if got.CredentialSet128 != payload.CredentialSet128 {
+		t.Fatalf("credential set hash = %x, want %x", got.CredentialSet128, payload.CredentialSet128)
 	}
 }
 
@@ -129,6 +175,18 @@ func TestNormalizeAgentIDDeterministic(t *testing.T) {
 
 	if a != b {
 		t.Fatalf("normalized ids differ: %q != %q", a, b)
+	}
+
+	hashA, err := AgentIDHash("  Alice.Example ")
+	if err != nil {
+		t.Fatalf("hash a: %v", err)
+	}
+	hashB, err := AgentIDHash("alice.example")
+	if err != nil {
+		t.Fatalf("hash b: %v", err)
+	}
+	if hashA != hashB {
+		t.Fatalf("normalized hashes differ: %x != %x", hashA, hashB)
 	}
 }
 
@@ -156,10 +214,17 @@ func testKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return publicKey, privateKey
 }
 
-func testPayload(t *testing.T, publicKey ed25519.PublicKey) Payload {
+func testPayload(t *testing.T) Payload {
 	t.Helper()
 
-	payload, err := New("agent.example", 300, publicKey)
+	payload, err := New(
+		"agent.example",
+		300,
+		0x01,
+		42,
+		Hash128([]byte("facts pointer")),
+		Hash128([]byte("credential set")),
+	)
 	if err != nil {
 		t.Fatalf("new payload: %v", err)
 	}
