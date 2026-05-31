@@ -16,6 +16,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/solai/nanda/internal/admin"
 	"github.com/solai/nanda/internal/api"
 	"github.com/solai/nanda/internal/audit"
 	"github.com/solai/nanda/internal/config"
@@ -148,19 +149,40 @@ func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	adminService, err := admin.NewService(indexStore, auditStore, revocationStore)
+	if err != nil {
+		return nil, err
+	}
 
 	mux := http.NewServeMux()
 	registerHandler := api.RegisterAgentHandler(registrationService)
 	resolveHandler := api.ResolveAgentHandler(resolverService)
-	addRoutes(mux, registerHandler, resolveHandler, cfg.APIToken)
+	adminHandlers := adminRouteHandlers{
+		getAgent:            api.AdminGetAgentHandler(adminService),
+		listAudit:           api.AdminListAuditHandler(adminService),
+		listAuditByAgent:    api.AdminListAuditByAgentHandler(adminService),
+		getRevocationStatus: api.AdminGetRevocationStatusHandler(adminService),
+	}
+	addRoutes(mux, registerHandler, resolveHandler, adminHandlers, cfg.APIToken)
 	return api.WithRequestID(mux), nil
 }
 
-func addRoutes(mux *http.ServeMux, registerHandler http.Handler, resolveHandler http.Handler, apiToken string) {
+type adminRouteHandlers struct {
+	getAgent            http.Handler
+	listAudit           http.Handler
+	listAuditByAgent    http.Handler
+	getRevocationStatus http.Handler
+}
+
+func addRoutes(mux *http.ServeMux, registerHandler http.Handler, resolveHandler http.Handler, adminHandlers adminRouteHandlers, apiToken string) {
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", readyzHandler)
 	mux.Handle("/v1/agents/register", api.WithBearerAuth(registerHandler, apiToken))
 	mux.Handle("/v1/resolve", api.WithBearerAuth(resolveHandler, apiToken))
+	mux.Handle("/v1/admin/agents/{agentId}", api.WithBearerAuth(adminHandlers.getAgent, apiToken))
+	mux.Handle("/v1/admin/audit", api.WithBearerAuth(adminHandlers.listAudit, apiToken))
+	mux.Handle("/v1/admin/audit/{agentId}", api.WithBearerAuth(adminHandlers.listAuditByAgent, apiToken))
+	mux.Handle("/v1/admin/revocation/{issuer}/{credentialId}", api.WithBearerAuth(adminHandlers.getRevocationStatus, apiToken))
 }
 
 func runMigrations(ctx context.Context, db *sql.DB) error {

@@ -28,3 +28,4 @@ Completed:
 - Added simple bearer-token API auth guardrail for registration and resolution.
 - Added production migration gating with `NANDA_AUTO_MIGRATE`.
 - Added PostgreSQL append-only trigger protection for `audit_events`.
+- Added minimal admin inspection API for agents, audit events, and revocation status.

@@ -51,13 +51,13 @@ If no signing key is configured, the server generates an ephemeral local Ed25519
 
 Production mode requires `NANDA_POSTGRES_DSN`, `NANDA_PRIVATE_KEY_BASE64`, and `NANDA_API_TOKEN`. Ephemeral signing keys are forbidden in production mode.
 
-When `NANDA_API_TOKEN` is configured, `POST /v1/agents/register` and `POST /v1/resolve` require:
+When `NANDA_API_TOKEN` is configured, `POST /v1/agents/register`, `POST /v1/resolve`, and `/v1/admin/*` require:
 
 ```sh
 Authorization: Bearer <token>
 ```
 
-`GET /healthz` and `GET /readyz` remain public. In local mode without `NANDA_API_TOKEN`, registration and resolution remain unauthenticated for demos.
+`GET /healthz` and `GET /readyz` remain public. In local mode without `NANDA_API_TOKEN`, registration, resolution, and admin inspection remain unauthenticated for demos.
 
 ## Register an Agent
 
@@ -75,6 +75,46 @@ curl -sS -X POST http://localhost:8080/v1/resolve \
   -H 'Content-Type: application/json' \
   -H 'X-Request-ID: demo-resolve' \
   --data-binary @docs/examples/resolve-agent.json
+```
+
+## Admin Inspection
+
+Set `TOKEN_HEADER` only when the server was started with `NANDA_API_TOKEN`:
+
+```sh
+TOKEN_HEADER=(-H 'Authorization: Bearer replace-me')
+```
+
+Get the current L1 record for an agent:
+
+```sh
+curl -sS http://localhost:8080/v1/admin/agents/agent.example \
+  "${TOKEN_HEADER[@]}" \
+  -H 'X-Request-ID: demo-admin-agent'
+```
+
+List audit events:
+
+```sh
+curl -sS http://localhost:8080/v1/admin/audit \
+  "${TOKEN_HEADER[@]}" \
+  -H 'X-Request-ID: demo-admin-audit'
+```
+
+List audit events for one agent:
+
+```sh
+curl -sS http://localhost:8080/v1/admin/audit/agent.example \
+  "${TOKEN_HEADER[@]}" \
+  -H 'X-Request-ID: demo-admin-audit-agent'
+```
+
+Get revocation status for a credential:
+
+```sh
+curl -sS http://localhost:8080/v1/admin/revocation/issuer.example/credential-1 \
+  "${TOKEN_HEADER[@]}" \
+  -H 'X-Request-ID: demo-admin-revocation'
 ```
 
 ## Demo Script

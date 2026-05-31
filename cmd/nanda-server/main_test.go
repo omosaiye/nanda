@@ -57,7 +57,7 @@ func TestPublicProbesBypassAPIAuth(t *testing.T) {
 	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	addRoutes(mux, protected, protected, "secret")
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
 
 	for _, path := range []string{"/healthz", "/readyz"} {
 		t.Run(path, func(t *testing.T) {
@@ -78,7 +78,7 @@ func TestProtectedRoutesRequireAPIAuthWhenConfigured(t *testing.T) {
 	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	addRoutes(mux, protected, protected, "secret")
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
 
 	for _, path := range []string{"/v1/agents/register", "/v1/resolve"} {
 		t.Run(path, func(t *testing.T) {
@@ -91,5 +91,58 @@ func TestProtectedRoutesRequireAPIAuthWhenConfigured(t *testing.T) {
 				t.Fatalf("status code = %d, want %d", response.Code, http.StatusUnauthorized)
 			}
 		})
+	}
+}
+
+func TestAdminRoutesRequireAPIAuthWhenConfigured(t *testing.T) {
+	mux := http.NewServeMux()
+	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+
+	for _, path := range []string{
+		"/v1/admin/agents/agent.example",
+		"/v1/admin/audit",
+		"/v1/admin/audit/agent.example",
+		"/v1/admin/revocation/issuer.example/credential-1",
+	} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			response := httptest.NewRecorder()
+
+			mux.ServeHTTP(response, request)
+
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status code = %d, want %d", response.Code, http.StatusUnauthorized)
+			}
+		})
+	}
+}
+
+func TestAdminRoutesAllowValidAPIAuthWhenConfigured(t *testing.T) {
+	mux := http.NewServeMux()
+	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/audit", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
+	}
+}
+
+func testAdminHandlers(handler http.Handler) adminRouteHandlers {
+	return adminRouteHandlers{
+		getAgent:            handler,
+		listAudit:           handler,
+		listAuditByAgent:    handler,
+		getRevocationStatus: handler,
 	}
 }
