@@ -21,6 +21,10 @@ Known hardening tasks for NANDA v0:
 15. Add stronger deployment hardening for production packaging and operations.
 16. Add richer audit search and export for operator workflows.
 17. Add an admin revocation mutation endpoint with audit events.
+18. Add branch protection requiring CI before merge.
+19. Add CodeQL or equivalent security scanning.
+20. Add dependency scanning policy and alert triage process.
+21. Add stronger integration test isolation if shared database state becomes flaky in CI.
 
 Completed:
 
@@ -36,3 +40,5 @@ Completed:
 - Added monotonic sequence enforcement so stale `AgentAddr120` records cannot overwrite newer records.
 - Added resolver cache metadata based on L1 freshness and selected endpoint TTL.
 - Added expired L1 record rejection during resolution.
+- Added GitHub Actions CI for formatting, unit tests, and PostgreSQL-backed integration tests.
+- Added release checklist documentation for local prototype releases.
