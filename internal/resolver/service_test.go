@@ -389,10 +389,14 @@ func TestServiceResolveMissingAgentFactsReturnsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
+	service.now = testNow
 
 	_, err = service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+	if errors.Is(err, ErrExpired) {
+		t.Fatalf("resolve error = %v, want missing agent facts not found, not expired", err)
+	}
 	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("resolve error = %v, want not found", err)
+		t.Fatalf("resolve error = %v, want missing agent facts not found", err)
 	}
 }
 
