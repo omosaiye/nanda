@@ -15,7 +15,7 @@ The v0.1 local prototype supports:
 - Resolver API at `POST /v1/resolve`.
 - Trust verifier v0 for local Ed25519 capability credentials.
 - Local trusted issuer configuration through `NANDA_TRUST_ISSUERS_JSON` or `NANDA_TRUST_ISSUERS_FILE`.
-- Revocation v0 through the revocation store and verifier hook.
+- Revocation v0 through the revocation store, verifier hook, and admin mutation endpoint.
 - Hash-chained audit events with append-only Postgres table protection.
 - Admin inspection API for agents, audit events, and revocation status.
 
@@ -104,10 +104,18 @@ Admin list audit:
 curl -sS 'http://localhost:8080/v1/admin/audit?limit=10&offset=0'
 ```
 
+Admin set revocation status:
+
+```sh
+curl -sS -X POST http://localhost:8080/v1/admin/revocation \
+  -H 'Content-Type: application/json' \
+  --data '{"issuer":"did:example:issuer","credentialId":"credential-1","status":"revoked","reason":"operator action"}'
+```
+
 Admin get revocation status:
 
 ```sh
-curl -sS http://localhost:8080/v1/admin/revocation/issuer.example/credential-1
+curl -sS http://localhost:8080/v1/admin/revocation/did:example:issuer/credential-1
 ```
 
 If `NANDA_API_TOKEN` is set, add `-H 'Authorization: Bearer <token>'` to registration, resolution, and admin requests. Health and readiness are public.
@@ -138,7 +146,7 @@ This is local Ed25519 issuer trust only. It does not implement DID resolution, f
 
 ## Revocation Status
 
-Revocation support currently exists at the store and trust-verifier level. The admin API can inspect revocation status with `GET /v1/admin/revocation/{issuer}/{credentialId}` when records exist, and returns active/not found when no record exists. There is no HTTP endpoint in v0.1 to mutate revocation status; adding an admin revocation mutation endpoint is a future hardening task.
+Revocation support exists at the store and trust-verifier level. The admin API can mutate local v0 revocation status with `POST /v1/admin/revocation` and inspect status with `GET /v1/admin/revocation/{issuer}/{credentialId}`. Capability-required resolution fails closed when a matching credential is revoked.
 
 ## Out of Scope
 

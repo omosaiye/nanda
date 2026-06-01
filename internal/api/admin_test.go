@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,21 +216,87 @@ func TestAdminGetRevocationStatusHandlerSuccess(t *testing.T) {
 	}
 }
 
+func TestAdminSetRevocationStatusHandlerSuccess(t *testing.T) {
+	service := &fakeAdminService{
+		setRevocationResponse: admin.SetRevocationStatusResponse{
+			Issuer:       "did:example:issuer",
+			CredentialID: "credential-1",
+			Status:       revocation.StatusRevoked,
+			Reason:       "operator action",
+			Updated:      true,
+		},
+	}
+	handler := AdminSetRevocationStatusHandler(service)
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/revocation", strings.NewReader(`{
+		"issuer":"did:example:issuer",
+		"credentialId":"credential-1",
+		"status":"revoked",
+		"reason":"operator action"
+	}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if service.setRevocationRequest.Issuer != "did:example:issuer" || service.setRevocationRequest.CredentialID != "credential-1" || service.setRevocationRequest.Status != revocation.StatusRevoked || service.setRevocationRequest.Reason != "operator action" {
+		t.Fatalf("request = %+v, want revocation request", service.setRevocationRequest)
+	}
+	var got admin.SetRevocationStatusResponse
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got != service.setRevocationResponse {
+		t.Fatalf("response = %+v, want %+v", got, service.setRevocationResponse)
+	}
+}
+
+func TestAdminSetRevocationStatusHandlerMalformedJSON(t *testing.T) {
+	handler := AdminSetRevocationStatusHandler(&fakeAdminService{})
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/revocation", strings.NewReader(`{"issuer":`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertJSONError(t, rec, "invalid_json", "request body must be valid JSON")
+}
+
+func TestAdminSetRevocationStatusHandlerInvalidBody(t *testing.T) {
+	handler := AdminSetRevocationStatusHandler(&fakeAdminService{
+		err: admin.ValidationError{Field: "status", Err: errors.New("status must be active or revoked")},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/revocation", strings.NewReader(`{"issuer":"did:example:issuer","credentialId":"credential-1","status":"disabled"}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body=%q", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	assertJSONError(t, rec, "admin_validation_failed", "admin validation failed: status: status must be active or revoked")
+}
+
 func TestAdminHandlersRejectWrongMethod(t *testing.T) {
 	tests := []struct {
 		name    string
 		handler http.Handler
 		path    string
+		method  string
 	}{
-		{name: "agent", handler: AdminGetAgentHandler(&fakeAdminService{}), path: "/v1/admin/agents/agent.example"},
-		{name: "audit", handler: AdminListAuditHandler(&fakeAdminService{}), path: "/v1/admin/audit"},
-		{name: "audit by agent", handler: AdminListAuditByAgentHandler(&fakeAdminService{}), path: "/v1/admin/audit/agent.example"},
-		{name: "revocation", handler: AdminGetRevocationStatusHandler(&fakeAdminService{}), path: "/v1/admin/revocation/issuer.example/credential-1"},
+		{name: "agent", handler: AdminGetAgentHandler(&fakeAdminService{}), path: "/v1/admin/agents/agent.example", method: http.MethodPost},
+		{name: "audit", handler: AdminListAuditHandler(&fakeAdminService{}), path: "/v1/admin/audit", method: http.MethodPost},
+		{name: "audit by agent", handler: AdminListAuditByAgentHandler(&fakeAdminService{}), path: "/v1/admin/audit/agent.example", method: http.MethodPost},
+		{name: "revocation", handler: AdminGetRevocationStatusHandler(&fakeAdminService{}), path: "/v1/admin/revocation/issuer.example/credential-1", method: http.MethodPost},
+		{name: "set revocation", handler: AdminSetRevocationStatusHandler(&fakeAdminService{}), path: "/v1/admin/revocation", method: http.MethodGet},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
+			req := httptest.NewRequest(tt.method, tt.path, nil)
 			rec := httptest.NewRecorder()
 
 			tt.handler.ServeHTTP(rec, req)
@@ -255,16 +322,38 @@ func TestAdminHandlerSetsRequestIDHeader(t *testing.T) {
 	}
 }
 
+func TestAdminSetRevocationStatusHandlerSetsRequestIDHeader(t *testing.T) {
+	handler := AdminSetRevocationStatusHandler(&fakeAdminService{
+		setRevocationResponse: admin.SetRevocationStatusResponse{
+			Issuer:       "did:example:issuer",
+			CredentialID: "credential-1",
+			Status:       revocation.StatusRevoked,
+			Updated:      true,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/admin/revocation", strings.NewReader(`{"issuer":"did:example:issuer","credentialId":"credential-1","status":"revoked"}`))
+	req.Header.Set("X-Request-ID", "admin-revocation-test")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("X-Request-ID"); got != "admin-revocation-test" {
+		t.Fatalf("request id header = %q, want admin-revocation-test", got)
+	}
+}
+
 type fakeAdminService struct {
-	agent           admin.AgentResponse
-	auditResult     audit.ListResult
-	revocation      admin.RevocationStatusResponse
-	err             error
-	agentID         string
-	issuer          string
-	credentialID    string
-	listAuditCalled bool
-	auditQuery      audit.Query
+	agent                 admin.AgentResponse
+	auditResult           audit.ListResult
+	revocation            admin.RevocationStatusResponse
+	setRevocationResponse admin.SetRevocationStatusResponse
+	err                   error
+	agentID               string
+	issuer                string
+	credentialID          string
+	setRevocationRequest  admin.SetRevocationStatusRequest
+	listAuditCalled       bool
+	auditQuery            audit.Query
 }
 
 func (s *fakeAdminService) GetAgent(_ context.Context, agentID string) (admin.AgentResponse, error) {
@@ -300,4 +389,12 @@ func (s *fakeAdminService) GetRevocationStatus(_ context.Context, issuer string,
 		return admin.RevocationStatusResponse{}, s.err
 	}
 	return s.revocation, nil
+}
+
+func (s *fakeAdminService) SetRevocationStatus(_ context.Context, req admin.SetRevocationStatusRequest) (admin.SetRevocationStatusResponse, error) {
+	s.setRevocationRequest = req
+	if s.err != nil {
+		return admin.SetRevocationStatusResponse{}, s.err
+	}
+	return s.setRevocationResponse, nil
 }

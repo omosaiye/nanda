@@ -114,6 +114,7 @@ func TestAdminRoutesRequireAPIAuthWhenConfigured(t *testing.T) {
 		"/v1/admin/agents/agent.example",
 		"/v1/admin/audit",
 		"/v1/admin/audit/agent.example",
+		"/v1/admin/revocation",
 		"/v1/admin/revocation/issuer.example/credential-1",
 	} {
 		t.Run(path, func(t *testing.T) {
@@ -126,6 +127,46 @@ func TestAdminRoutesRequireAPIAuthWhenConfigured(t *testing.T) {
 				t.Fatalf("status code = %d, want %d", response.Code, http.StatusUnauthorized)
 			}
 		})
+	}
+}
+
+func TestAdminRevocationMutationRequiresAPIAuthWhenConfigured(t *testing.T) {
+	mux := http.NewServeMux()
+	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/admin/revocation", nil)
+	response := httptest.NewRecorder()
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestAdminRevocationMutationAllowsValidAPIAuthWhenConfigured(t *testing.T) {
+	mux := http.NewServeMux()
+	reached := false
+	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/admin/revocation", nil)
+	request.Header.Set("Authorization", "Bearer secret")
+	response := httptest.NewRecorder()
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
+	}
+	if !reached {
+		t.Fatal("handler was not reached")
 	}
 }
 
@@ -188,6 +229,7 @@ func testAdminHandlers(handler http.Handler) adminRouteHandlers {
 		listAudit:           handler,
 		listAuditByAgent:    handler,
 		getRevocationStatus: handler,
+		setRevocationStatus: handler,
 	}
 }
 

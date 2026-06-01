@@ -173,7 +173,7 @@ Query params:
 
 - `limit`: positive integer, defaults to 100, maximum 500.
 - `offset`: non-negative integer, defaults to 0.
-- `eventType`: one of `agent.registered`, `resolve.allowed`, `resolve.denied`, `trust.denied`.
+- `eventType`: one of `agent.registered`, `resolve.allowed`, `resolve.denied`, `trust.denied`, `credential.revocation.updated`.
 - `decision`: one of `allowed`, `denied`.
 
 Response:
@@ -212,6 +212,41 @@ Query params: same as `GET /v1/admin/audit`.
 Response: same list shape as `GET /v1/admin/audit`.
 
 Errors: `400 admin_validation_failed`, `401 unauthorized`, `405 method_not_allowed`, `500 internal_error`.
+
+## POST /v1/admin/revocation
+
+Purpose: set local v0 credential revocation status with an audit event.
+
+Auth: optional bearer token in local mode; required when `NANDA_API_TOKEN` is set.
+
+Request:
+
+```json
+{
+  "issuer": "did:example:issuer",
+  "credentialId": "credential-1",
+  "status": "revoked",
+  "reason": "operator action"
+}
+```
+
+`status` must be `active` or `revoked`. `reason` is optional.
+
+Response:
+
+```json
+{
+  "issuer": "did:example:issuer",
+  "credentialId": "credential-1",
+  "status": "revoked",
+  "reason": "operator action",
+  "updated": true
+}
+```
+
+The mutation appends a `credential.revocation.updated` audit event with decision `allowed`. This is a local v0 store mutation only; it does not implement VC Status Lists or DID resolution.
+
+Errors: `400 invalid_json`, `400 admin_validation_failed`, `401 unauthorized`, `405 method_not_allowed`, `500 internal_error`.
 
 ## GET /v1/admin/revocation/{issuer}/{credentialId}
 
