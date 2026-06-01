@@ -16,6 +16,7 @@ NANDA v0.1 is a local prototype with a compact signed L1 record, local L2 AgentF
 - `internal/audit`: appends canonical hash-chained audit events, queries them, and verifies the chain.
 - `internal/admin`: reads agent index metadata, audit events, and revocation status for operator inspection.
 - `internal/api`: maps services to HTTP handlers, JSON errors, bearer-token guardrail auth, and request IDs.
+- `internal/observability`: keeps local in-process counters and latency summaries, renders `/metrics`, wraps audit appends for event metrics, and records structured HTTP request logs.
 
 ## Data Flow
 
@@ -32,6 +33,14 @@ Resolution accepts an agent ID and optional required capability. It loads the L1
 - The v0 trust verifier only trusts local configured issuer public keys from `NANDA_TRUST_ISSUERS_JSON` or `NANDA_TRUST_ISSUERS_FILE`. Capability-required resolution fails closed when no configured issuer matches the credential issuer.
 - Issuer trust configuration is local Ed25519 key pinning. It is not DID resolution, full W3C VC trust, or VC Status List processing.
 - Admin routes are protected only by the same optional bearer-token guardrail as registration and resolution.
+
+## Observability v0
+
+The server includes lightweight local observability only. HTTP middleware records structured logs for every route, including health and readiness probes, with `request_id`, method, route template, status, and duration in milliseconds. Logs do not include request bodies or authorization headers.
+
+`GET /metrics` is public like `/healthz` and `/readyz`. It renders deterministic text metrics from an in-process registry and does not require Prometheus or any external collector. Metric labels use stable route templates such as `/v1/admin/agents/{agentId}` and `/v1/admin/revocation/{issuer}/{credentialId}` so agent IDs, issuers, credential IDs, and other path values are not exposed as labels.
+
+Domain metrics cover HTTP requests, registration outcomes, resolve outcomes, trust denials, admin requests, revocation updates, and successful audit appends by event type and decision. This is not OpenTelemetry, distributed tracing, log aggregation, alerting, or a production observability stack.
 
 ## Key Invariants
 
@@ -50,6 +59,5 @@ Resolution accepts an agent ID and optional required capability. It loads the L1
 - No ZK proofs.
 - No IPFS, Tor, OHTTP, Trillian, Envoy, Redis, NATS, Kubernetes, or UI.
 - No production RBAC or operator authorization model beyond a bearer token.
-- No HTTP endpoint currently mutates revocation status.
 - No issuer lifecycle management, key rotation workflow, or DID-backed trust chain.
 - Filesystem AgentFacts storage is intended for the local prototype.

@@ -11,7 +11,7 @@ Errors use this shape:
 }
 ```
 
-Health and readiness are public. Registration, resolution, and admin routes require `Authorization: Bearer <token>` only when `NANDA_API_TOKEN` is configured.
+Health, readiness, and local metrics are public. Registration, resolution, and admin routes require `Authorization: Bearer <token>` only when `NANDA_API_TOKEN` is configured.
 
 ## GET /healthz
 
@@ -36,6 +36,24 @@ Response:
 ```json
 { "status": "ready" }
 ```
+
+## GET /metrics
+
+Purpose: expose lightweight local v0 counters and latency observations in a simple Prometheus-compatible text format.
+
+Auth: none.
+
+Response content type: `text/plain; version=0.0.4`.
+
+Example:
+
+```text
+nanda_http_requests_total{method="POST",route="/v1/resolve",status="200"} 3
+nanda_http_request_duration_ms_count{route="/v1/resolve"} 3
+nanda_http_request_duration_ms_sum{route="/v1/resolve"} 12.250
+```
+
+Metrics use route templates such as `/v1/admin/agents/{agentId}` and do not include request bodies, credentials, tokens, signatures, private keys, agent IDs, issuers, or credential IDs.
 
 ## POST /v1/agents/register
 
