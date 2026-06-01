@@ -25,6 +25,7 @@ In `NANDA_MODE=production`, startup does not run migrations unless `NANDA_AUTO_M
 ```sh
 NANDA_MODE=local \
 NANDA_POSTGRES_DSN='postgres://nanda:nanda@localhost:5432/nanda?sslmode=disable' \
+NANDA_TRUST_ISSUERS_JSON='{"did:example:issuer":"<base64-ed25519-public-key>"}' \
 go run ./cmd/nanda-server
 ```
 
@@ -44,10 +45,22 @@ The server listens on `:8080` by default.
 - `NANDA_FACTS_DIR`: local AgentFacts storage directory. Defaults to `./var/facts`.
 - `NANDA_PRIVATE_KEY_BASE64`: base64 Ed25519 private key. Optional for local demos.
 - `NANDA_PUBLIC_KEY_BASE64`: base64 Ed25519 public key matching the private key. Optional.
+- `NANDA_TRUST_ISSUERS_JSON`: JSON object mapping issuer name to base64 Ed25519 public key. Optional.
+- `NANDA_TRUST_ISSUERS_FILE`: path to a JSON file with the same shape as `NANDA_TRUST_ISSUERS_JSON`. Optional.
 - `NANDA_API_TOKEN`: bearer token for protected API routes. Optional in local mode. Required in production mode.
 - `NANDA_AUTO_MIGRATE`: in local mode, migrations run unless this is `false`. In production mode, migrations run only when this is exactly `true`.
 
 If no signing key is configured, the server generates an ephemeral local Ed25519 key at startup. Records from a previous ephemeral run will not verify after restarting with a different key.
+
+Set only one of `NANDA_TRUST_ISSUERS_JSON` and `NANDA_TRUST_ISSUERS_FILE`; configuring both is a startup error. The trust issuer map looks like:
+
+```json
+{
+  "did:example:issuer": "<base64-ed25519-public-key>"
+}
+```
+
+This is local Ed25519 issuer trust. The server does not resolve DIDs, perform full W3C VC canonicalization, or consume VC Status Lists.
 
 Production mode requires `NANDA_POSTGRES_DSN`, `NANDA_PRIVATE_KEY_BASE64`, and `NANDA_API_TOKEN`. Ephemeral signing keys are forbidden in production mode.
 
@@ -78,6 +91,27 @@ curl -sS -X POST http://localhost:8080/v1/resolve \
 ```
 
 Resolver responses include additive `cache` metadata with `ttlSeconds`, `expiresAt`, and `sourceSequence`. The cache TTL is capped by both the remaining L1 `AgentAddr120` TTL and the selected endpoint TTL. The L1 index rejects stale sequence overwrites, and same-sequence updates are idempotent only when the record bytes are identical.
+
+## Resolve with Required Capability
+
+When `requiredCapability` is present, the resolver requires a valid signed capability credential from a configured issuer. If the issuer allowlist is empty or does not include the credential issuer, the request fails closed with `403 trust_denied`.
+
+The trusted issuer configuration must be present when the server starts, for example by setting `NANDA_TRUST_ISSUERS_JSON` or `NANDA_TRUST_ISSUERS_FILE` on the `go run ./cmd/nanda-server` command. Setting those variables only when invoking the helper script does not configure trust on an already-running server.
+
+```sh
+curl -sS -X POST http://localhost:8080/v1/resolve \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-ID: demo-resolve-capability' \
+  --data-binary @docs/examples/resolve-agent-required-capability.json
+```
+
+The helper script is intentionally limited because the repo does not yet include a credential-signing demo:
+
+```sh
+./scripts/demo-trust-local.sh
+```
+
+`scripts/demo-trust-local.sh` only sends the capability-required resolve request to the running server. It does not configure server trust.
 
 ## Admin Inspection
 

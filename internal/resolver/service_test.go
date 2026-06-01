@@ -381,7 +381,7 @@ func TestServiceResolveMissingAgentFactsReturnsNotFound(t *testing.T) {
 	pointer := facts.FactsPointer{Scheme: "mem", Path: "agent.example"}
 	record := testRecord(t, "agent.example", facts.PointerHash128(pointer), privateKey)
 	service, err := NewService(
-		&fakeIndexStore{record: record},
+		&fakeIndexStore{record: record, updatedAt: testNow()},
 		&fakeFactsStore{pointer: pointer, getErr: facts.ErrNotFound},
 		&fakePointerResolver{pointer: pointer},
 		publicKey,
@@ -389,10 +389,14 @@ func TestServiceResolveMissingAgentFactsReturnsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
+	service.now = testNow
 
 	_, err = service.Resolve(context.Background(), ResolveRequest{AgentID: "agent.example"})
+	if errors.Is(err, ErrExpired) {
+		t.Fatalf("resolve error = %v, want missing agent facts not found, not expired", err)
+	}
 	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("resolve error = %v, want not found", err)
+		t.Fatalf("resolve error = %v, want missing agent facts not found", err)
 	}
 }
 

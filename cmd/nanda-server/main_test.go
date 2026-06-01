@@ -2,10 +2,19 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/solai/nanda/internal/agentfacts"
+	"github.com/solai/nanda/internal/config"
+	"github.com/solai/nanda/internal/trust"
 )
 
 func TestProbeHandlers(t *testing.T) {
@@ -138,6 +147,41 @@ func TestAdminRoutesAllowValidAPIAuthWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestNewLocalTrustVerifierUsesConfiguredIssuers(t *testing.T) {
+	publicKey, privateKey := testIssuerKeyPair(t)
+	cfg := config.Local{
+		TrustedIssuers: trust.IssuerAllowlist{
+			"did:example:issuer": publicKey,
+		},
+	}
+	verifier, err := newLocalTrustVerifier(cfg, nil)
+	if err != nil {
+		t.Fatalf("new local trust verifier: %v", err)
+	}
+	credential := testCapabilityCredential()
+	signCapabilityCredential(t, &credential, privateKey)
+
+	err = verifier.VerifyCapability(context.Background(), []agentfacts.CapabilityCredential{credential}, "agent.example", "chat", testNow())
+	if err != nil {
+		t.Fatalf("verify capability: %v", err)
+	}
+}
+
+func TestNewLocalTrustVerifierFailsClosedWithoutConfiguredIssuer(t *testing.T) {
+	_, privateKey := testIssuerKeyPair(t)
+	verifier, err := newLocalTrustVerifier(config.Local{}, nil)
+	if err != nil {
+		t.Fatalf("new local trust verifier: %v", err)
+	}
+	credential := testCapabilityCredential()
+	signCapabilityCredential(t, &credential, privateKey)
+
+	err = verifier.VerifyCapability(context.Background(), []agentfacts.CapabilityCredential{credential}, "agent.example", "chat", testNow())
+	if !errors.Is(err, trust.ErrUntrustedIssuer) {
+		t.Fatalf("verify capability error = %v, want %v", err, trust.ErrUntrustedIssuer)
+	}
+}
+
 func testAdminHandlers(handler http.Handler) adminRouteHandlers {
 	return adminRouteHandlers{
 		getAgent:            handler,
@@ -145,4 +189,58 @@ func testAdminHandlers(handler http.Handler) adminRouteHandlers {
 		listAuditByAgent:    handler,
 		getRevocationStatus: handler,
 	}
+}
+
+func testCapabilityCredential() agentfacts.CapabilityCredential {
+	return agentfacts.CapabilityCredential{
+		ID:           "credential-1",
+		Type:         agentfacts.AgentCapabilityCredential,
+		Issuer:       "did:example:issuer",
+		Subject:      "agent.example",
+		Capabilities: []string{"chat"},
+		ValidFrom:    testNow().Add(-time.Minute),
+		ValidUntil:   testNow().Add(time.Hour),
+	}
+}
+
+func signCapabilityCredential(t *testing.T, credential *agentfacts.CapabilityCredential, privateKey ed25519.PrivateKey) {
+	t.Helper()
+
+	payload, err := json.Marshal(credentialSigningPayload{
+		ID:           credential.ID,
+		Type:         credential.Type,
+		Issuer:       credential.Issuer,
+		Subject:      credential.Subject,
+		Capabilities: credential.Capabilities,
+		ValidFrom:    credential.ValidFrom,
+		ValidUntil:   credential.ValidUntil,
+	})
+	if err != nil {
+		t.Fatalf("marshal credential signing payload: %v", err)
+	}
+	credential.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, payload))
+}
+
+type credentialSigningPayload struct {
+	ID           string    `json:"id"`
+	Type         string    `json:"type"`
+	Issuer       string    `json:"issuer"`
+	Subject      string    `json:"subject"`
+	Capabilities []string  `json:"capabilities"`
+	ValidFrom    time.Time `json:"validFrom"`
+	ValidUntil   time.Time `json:"validUntil"`
+}
+
+func testIssuerKeyPair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	return publicKey, privateKey
+}
+
+func testNow() time.Time {
+	return time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
 }

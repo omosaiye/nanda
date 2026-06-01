@@ -104,6 +104,8 @@ Request:
 
 `requiredCapability` is optional. When present, trust verification is required and failures are fail-closed.
 
+Capability trust uses the server's local Ed25519 issuer allowlist from `NANDA_TRUST_ISSUERS_JSON` or `NANDA_TRUST_ISSUERS_FILE`. If no configured issuer matches the credential issuer, the resolver returns `403 trust_denied`. This is not DID resolution, full W3C VC canonicalization, or VC Status List processing.
+
 Response:
 
 ```json

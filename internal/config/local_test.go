@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -32,6 +34,9 @@ func TestLoadLocalDefaultsAndEphemeralKey(t *testing.T) {
 	}
 	if !cfg.AutoMigrate {
 		t.Fatal("local mode should auto-migrate by default")
+	}
+	if len(cfg.TrustedIssuers) != 0 {
+		t.Fatalf("trusted issuers count = %d, want 0", len(cfg.TrustedIssuers))
 	}
 }
 
@@ -205,6 +210,105 @@ func TestLoadLocalRejectsMismatchedPublicKey(t *testing.T) {
 	}
 }
 
+func TestLoadLocalTrustedIssuersJSON(t *testing.T) {
+	publicKey, _ := testPublicKey(t)
+	values := map[string]string{
+		"NANDA_TRUST_ISSUERS_JSON": `{"did:example:issuer":"` + base64.StdEncoding.EncodeToString(publicKey) + `"}`,
+	}
+
+	cfg, err := LoadLocal(func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatalf("load local: %v", err)
+	}
+	if got := cfg.TrustedIssuers["did:example:issuer"]; string(got) != string(publicKey) {
+		t.Fatalf("trusted issuer key = %x, want %x", got, publicKey)
+	}
+}
+
+func TestLoadLocalTrustedIssuersFile(t *testing.T) {
+	publicKey, _ := testPublicKey(t)
+	path := filepath.Join(t.TempDir(), "trust-issuers.json")
+	if err := os.WriteFile(path, []byte(`{"did:example:issuer":"`+base64.StdEncoding.EncodeToString(publicKey)+`"}`), 0o600); err != nil {
+		t.Fatalf("write trust config: %v", err)
+	}
+	values := map[string]string{
+		"NANDA_TRUST_ISSUERS_FILE": path,
+	}
+
+	cfg, err := LoadLocal(func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatalf("load local: %v", err)
+	}
+	if got := cfg.TrustedIssuers["did:example:issuer"]; string(got) != string(publicKey) {
+		t.Fatalf("trusted issuer key = %x, want %x", got, publicKey)
+	}
+}
+
+func TestLoadLocalTrustedIssuersRejectsJSONAndFile(t *testing.T) {
+	_, err := LoadLocal(func(key string) string {
+		switch key {
+		case "NANDA_TRUST_ISSUERS_JSON":
+			return `{}`
+		case "NANDA_TRUST_ISSUERS_FILE":
+			return "trust-issuers.json"
+		default:
+			return ""
+		}
+	})
+	if !errors.Is(err, ErrInvalidTrustConfig) {
+		t.Fatalf("load local error = %v, want %v", err, ErrInvalidTrustConfig)
+	}
+}
+
+func TestLoadLocalTrustedIssuersRejectsMalformedJSON(t *testing.T) {
+	_, err := LoadLocal(func(key string) string {
+		if key == "NANDA_TRUST_ISSUERS_JSON" {
+			return `{"did:example:issuer":`
+		}
+		return ""
+	})
+	if !errors.Is(err, ErrInvalidTrustConfig) {
+		t.Fatalf("load local error = %v, want %v", err, ErrInvalidTrustConfig)
+	}
+}
+
+func TestLoadLocalTrustedIssuersRejectsEmptyIssuerName(t *testing.T) {
+	publicKey, _ := testPublicKey(t)
+	_, err := LoadLocal(func(key string) string {
+		if key == "NANDA_TRUST_ISSUERS_JSON" {
+			return `{"  ":"` + base64.StdEncoding.EncodeToString(publicKey) + `"}`
+		}
+		return ""
+	})
+	if !errors.Is(err, ErrInvalidTrustConfig) {
+		t.Fatalf("load local error = %v, want %v", err, ErrInvalidTrustConfig)
+	}
+}
+
+func TestLoadLocalTrustedIssuersRejectsInvalidBase64(t *testing.T) {
+	_, err := LoadLocal(func(key string) string {
+		if key == "NANDA_TRUST_ISSUERS_JSON" {
+			return `{"did:example:issuer":"not base64!"}`
+		}
+		return ""
+	})
+	if !errors.Is(err, ErrInvalidTrustConfig) {
+		t.Fatalf("load local error = %v, want %v", err, ErrInvalidTrustConfig)
+	}
+}
+
+func TestLoadLocalTrustedIssuersRejectsInvalidPublicKeyLength(t *testing.T) {
+	_, err := LoadLocal(func(key string) string {
+		if key == "NANDA_TRUST_ISSUERS_JSON" {
+			return `{"did:example:issuer":"` + base64.StdEncoding.EncodeToString([]byte("short")) + `"}`
+		}
+		return ""
+	})
+	if !errors.Is(err, ErrInvalidTrustConfig) {
+		t.Fatalf("load local error = %v, want %v", err, ErrInvalidTrustConfig)
+	}
+}
+
 func testPrivateKeyBase64(t *testing.T) string {
 	t.Helper()
 
@@ -213,4 +317,14 @@ func testPrivateKeyBase64(t *testing.T) string {
 		t.Fatalf("generate key: %v", err)
 	}
 	return base64.StdEncoding.EncodeToString(privateKey)
+}
+
+func testPublicKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	return publicKey, privateKey
 }

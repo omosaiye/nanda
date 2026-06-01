@@ -9,14 +9,14 @@ Known hardening tasks for NANDA v0:
 3. Add trace IDs to audit payloads once tracing exists.
 4. Add isolated integration test databases to avoid shared-DSN package test interference.
 5. Add stricter local startup checks for filesystem permissions and schema drift.
-6. Add API examples for capability-protected resolution once issuer trust config exists.
-7. Later: replace placeholder `credentialSet128` with real credential-set commitment.
-8. Add OpenTelemetry traces for registration, resolution, trust checks, and audit writes.
-9. Add Prometheus metrics for request counts, denial counts, audit append failures, and resolver latency.
-10. Add stronger authentication and RBAC beyond the simple API token guardrail.
-11. Add W3C VC interoperability and canonicalization when v0 scope expands.
-12. Add DID resolution when v0 scope expands.
-13. Add VC Status Lists when v0 scope expands.
+6. Later: replace placeholder `credentialSet128` with real credential-set commitment.
+7. Add OpenTelemetry traces for registration, resolution, trust checks, and audit writes.
+8. Add Prometheus metrics for request counts, denial counts, audit append failures, and resolver latency.
+9. Add stronger authentication and RBAC beyond the simple API token guardrail.
+10. Add W3C VC interoperability and canonicalization when v0 scope expands.
+11. Add DID resolution when v0 scope expands.
+12. Add VC Status Lists when v0 scope expands.
+13. Add issuer lifecycle management and key rotation.
 14. Add private resolution path support when v0 scope expands.
 15. Add stronger deployment hardening for production packaging and operations.
 16. Add richer audit search and export for operator workflows.
@@ -42,3 +42,4 @@ Completed:
 - Added expired L1 record rejection during resolution.
 - Added GitHub Actions CI for formatting, unit tests, and PostgreSQL-backed integration tests.
 - Added release checklist documentation for local prototype releases.
+- Added local issuer trust configuration with capability-protected resolve examples.
