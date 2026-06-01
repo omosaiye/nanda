@@ -10,20 +10,25 @@ Known hardening tasks for NANDA v0:
 4. Add isolated integration test databases to avoid shared-DSN package test interference.
 5. Add stricter local startup checks for filesystem permissions and schema drift.
 6. Later: replace placeholder `credentialSet128` with real credential-set commitment.
-7. Add OpenTelemetry traces for registration, resolution, trust checks, and audit writes.
-8. Add Prometheus metrics for request counts, denial counts, audit append failures, and resolver latency.
-9. Add stronger authentication and RBAC beyond the simple API token guardrail.
-10. Add W3C VC interoperability and canonicalization when v0 scope expands.
-11. Add DID resolution when v0 scope expands.
-12. Add VC Status Lists and sub-second revocation propagation when v0 scope expands.
-13. Add issuer lifecycle management and key rotation.
-14. Add private resolution path support when v0 scope expands.
-15. Add stronger deployment hardening for production packaging and operations.
-16. Add richer audit search and export for operator workflows.
-17. Add branch protection requiring CI before merge.
-18. Add CodeQL or equivalent security scanning.
-19. Add dependency scanning policy and alert triage process.
-20. Add stronger integration test isolation if shared database state becomes flaky in CI.
+7. Future observability stack:
+   - Add OpenTelemetry traces for registration, resolution, trust checks, and audit writes.
+   - Add Prometheus scrape configuration.
+   - Add Grafana dashboards.
+   - Add distributed tracing.
+   - Add log aggregation.
+   - Add alerting and SLOs.
+8. Add stronger authentication and RBAC beyond the simple API token guardrail.
+9. Add W3C VC interoperability and canonicalization when v0 scope expands.
+10. Add DID resolution when v0 scope expands.
+11. Add VC Status Lists and sub-second revocation propagation when v0 scope expands.
+12. Add issuer lifecycle management and key rotation.
+13. Add private resolution path support when v0 scope expands.
+14. Add stronger deployment hardening for production packaging and operations.
+15. Add richer audit search and export for operator workflows.
+16. Add branch protection requiring CI before merge.
+17. Add CodeQL or equivalent security scanning.
+18. Add dependency scanning policy and alert triage process.
+19. Add stronger integration test isolation if shared database state becomes flaky in CI.
 
 Completed:
 
@@ -43,3 +48,4 @@ Completed:
 - Added release checklist documentation for local prototype releases.
 - Added local issuer trust configuration with capability-protected resolve examples.
 - Added an admin revocation mutation endpoint with audit events.
+- Added observability v0 with local structured request logging, in-process metrics, `/metrics`, low-cardinality route labels, and audit event counters.

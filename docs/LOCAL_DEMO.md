@@ -70,7 +70,23 @@ When `NANDA_API_TOKEN` is configured, `POST /v1/agents/register`, `POST /v1/reso
 Authorization: Bearer <token>
 ```
 
-`GET /healthz` and `GET /readyz` remain public. In local mode without `NANDA_API_TOKEN`, registration, resolution, and admin inspection remain unauthenticated for demos.
+`GET /healthz`, `GET /readyz`, and `GET /metrics` remain public. In local mode without `NANDA_API_TOKEN`, registration, resolution, and admin inspection remain unauthenticated for demos.
+
+## Local Metrics
+
+Metrics are in-process only and require no Prometheus server:
+
+```sh
+curl -sS http://localhost:8080/metrics
+```
+
+Example output after a successful resolve:
+
+```text
+nanda_http_requests_total{method="POST",route="/v1/resolve",status="200"} 1
+nanda_resolve_requests_total{decision="allowed",status="200"} 1
+nanda_http_request_duration_ms_count{route="/v1/resolve"} 1
+```
 
 ## Register an Agent
 
