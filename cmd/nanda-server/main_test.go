@@ -14,6 +14,7 @@ import (
 
 	"github.com/solai/nanda/internal/agentfacts"
 	"github.com/solai/nanda/internal/config"
+	"github.com/solai/nanda/internal/observability"
 	"github.com/solai/nanda/internal/trust"
 )
 
@@ -66,9 +67,9 @@ func TestPublicProbesBypassAPIAuth(t *testing.T) {
 	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret", nil)
 
-	for _, path := range []string{"/healthz", "/readyz"} {
+	for _, path := range []string{"/healthz", "/readyz", "/metrics"} {
 		t.Run(path, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, path, nil)
 			response := httptest.NewRecorder()
@@ -82,12 +83,38 @@ func TestPublicProbesBypassAPIAuth(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpointReturnsTextPlain(t *testing.T) {
+	mux := http.NewServeMux()
+	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	registry := observability.NewRegistry()
+	registry.IncHTTPRequests(http.MethodPost, observability.RouteResolve, http.StatusOK)
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret", registry)
+
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response := httptest.NewRecorder()
+
+	mux.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", response.Code, http.StatusOK)
+	}
+	if contentType := response.Header().Get("Content-Type"); contentType != "text/plain; version=0.0.4" {
+		t.Fatalf("content type = %q, want %q", contentType, "text/plain; version=0.0.4")
+	}
+	want := `nanda_http_requests_total{method="POST",route="/v1/resolve",status="200"} 1`
+	if !bytes.Contains(response.Body.Bytes(), []byte(want)) {
+		t.Fatalf("metrics body = %q, want to contain %q", response.Body.String(), want)
+	}
+}
+
 func TestProtectedRoutesRequireAPIAuthWhenConfigured(t *testing.T) {
 	mux := http.NewServeMux()
 	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret", nil)
 
 	for _, path := range []string{"/v1/agents/register", "/v1/resolve"} {
 		t.Run(path, func(t *testing.T) {
@@ -108,7 +135,7 @@ func TestAdminRoutesRequireAPIAuthWhenConfigured(t *testing.T) {
 	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret", nil)
 
 	for _, path := range []string{
 		"/v1/admin/agents/agent.example",
@@ -135,7 +162,7 @@ func TestAdminRevocationMutationRequiresAPIAuthWhenConfigured(t *testing.T) {
 	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret", nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/admin/revocation", nil)
 	response := httptest.NewRecorder()
@@ -154,7 +181,7 @@ func TestAdminRevocationMutationAllowsValidAPIAuthWhenConfigured(t *testing.T) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	})
-	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret", nil)
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/admin/revocation", nil)
 	request.Header.Set("Authorization", "Bearer secret")
@@ -175,7 +202,7 @@ func TestAdminRoutesAllowValidAPIAuthWhenConfigured(t *testing.T) {
 	protected := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret")
+	addRoutes(mux, protected, protected, testAdminHandlers(protected), "secret", nil)
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/admin/audit", nil)
 	request.Header.Set("Authorization", "Bearer secret")

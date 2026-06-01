@@ -22,6 +22,7 @@ import (
 	"github.com/solai/nanda/internal/config"
 	"github.com/solai/nanda/internal/facts"
 	"github.com/solai/nanda/internal/index"
+	"github.com/solai/nanda/internal/observability"
 	"github.com/solai/nanda/internal/registration"
 	"github.com/solai/nanda/internal/resolver"
 	"github.com/solai/nanda/internal/revocation"
@@ -98,6 +99,7 @@ func run(ctx context.Context) error {
 }
 
 func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
+	metricsRegistry := observability.NewRegistry()
 	indexStore, err := index.NewPostgresStore(db)
 	if err != nil {
 		return nil, err
@@ -116,6 +118,7 @@ func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
 		slog.Warn("postgres audit store unavailable; falling back to memory audit store", "err", err)
 		auditStore = audit.NewMemoryStore()
 	}
+	auditStore = observability.NewAuditStore(auditStore, metricsRegistry)
 	revocationStore, err := revocation.NewPostgresStore(db)
 	if err != nil {
 		return nil, err
@@ -162,8 +165,8 @@ func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
 		getRevocationStatus: api.AdminGetRevocationStatusHandler(adminService),
 		setRevocationStatus: api.AdminSetRevocationStatusHandler(adminService),
 	}
-	addRoutes(mux, registerHandler, resolveHandler, adminHandlers, cfg.APIToken)
-	return api.WithRequestID(mux), nil
+	addRoutes(mux, registerHandler, resolveHandler, adminHandlers, cfg.APIToken, metricsRegistry)
+	return api.WithRequestID(observability.Middleware(metricsRegistry, slog.Default(), mux)), nil
 }
 
 func newLocalTrustVerifier(cfg config.Local, revocationChecker trust.RevocationChecker) (*trust.Verifier, error) {
@@ -181,9 +184,10 @@ type adminRouteHandlers struct {
 	setRevocationStatus http.Handler
 }
 
-func addRoutes(mux *http.ServeMux, registerHandler http.Handler, resolveHandler http.Handler, adminHandlers adminRouteHandlers, apiToken string) {
+func addRoutes(mux *http.ServeMux, registerHandler http.Handler, resolveHandler http.Handler, adminHandlers adminRouteHandlers, apiToken string, metricsRegistry *observability.Registry) {
 	mux.HandleFunc("/healthz", healthzHandler)
 	mux.HandleFunc("/readyz", readyzHandler)
+	mux.HandleFunc("/metrics", metricsHandler(metricsRegistry))
 	mux.Handle("/v1/agents/register", api.WithBearerAuth(registerHandler, apiToken))
 	mux.Handle("/v1/resolve", api.WithBearerAuth(resolveHandler, apiToken))
 	mux.Handle("/v1/admin/agents/{agentId}", api.WithBearerAuth(adminHandlers.getAgent, apiToken))
@@ -234,6 +238,19 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 
 func readyzHandler(w http.ResponseWriter, _ *http.Request) {
 	writeStatus(w, "ready")
+}
+
+func metricsHandler(registry *observability.Registry) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		w.WriteHeader(http.StatusOK)
+		if registry == nil {
+			return
+		}
+		if err := registry.Render(w); err != nil {
+			slog.Error("write metrics response failed", "err", err)
+		}
+	}
 }
 
 type statusResponse struct {

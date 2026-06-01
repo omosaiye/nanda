@@ -16,7 +16,7 @@ Postgres-backed tests run when `NANDA_POSTGRES_DSN` is set:
 
 ```sh
 docker compose up -d postgres
-NANDA_POSTGRES_DSN='postgres://nanda:nanda@localhost:5432/nanda?sslmode=disable' go test ./...
+NANDA_POSTGRES_DSN='postgres://nanda:nanda@localhost:5432/nanda?sslmode=disable' go test -p 1 -count=1 -v ./...
 ```
 
 The Makefile default is equivalent:
@@ -25,7 +25,7 @@ The Makefile default is equivalent:
 make test-integration
 ```
 
-Integration tests may drop, recreate, truncate, or otherwise reset local test tables in the configured database. Use the local Docker Postgres instance for tests, not a shared or production database.
+Integration tests may drop, recreate, truncate, or otherwise reset local test tables in the configured database. Run Postgres-backed integration tests with `-p 1 -count=1` because packages share the same local test database. Use the local Docker Postgres instance for tests, not a shared or production database.
 
 ## Verification Script
 
@@ -39,7 +39,7 @@ go test ./...
 If `NANDA_POSTGRES_DSN` is set, it also runs a verbose integration pass:
 
 ```sh
-go test -v ./...
+go test -p 1 -count=1 -v ./...
 ```
 
 `make verify` delegates to this script.
@@ -51,7 +51,7 @@ The CI workflow runs on pushes and pull requests to `main`. It uses the Go versi
 CI also includes a separate PostgreSQL-backed integration job with a local service container using:
 
 ```sh
-NANDA_POSTGRES_DSN='postgres://nanda:nanda@localhost:5432/nanda?sslmode=disable' go test -v ./...
+NANDA_POSTGRES_DSN='postgres://nanda:nanda@localhost:5432/nanda?sslmode=disable' go test -p 1 -count=1 -v ./...
 ```
 
 ## Persistent Docker State
