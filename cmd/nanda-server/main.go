@@ -120,13 +120,11 @@ func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	trustVerifier, err := trust.NewVerifier(
-		trust.IssuerAllowlist{},
-		trust.WithRevocationChecker(revocationStore),
-	)
+	trustVerifier, err := newLocalTrustVerifier(cfg, revocationStore)
 	if err != nil {
 		return nil, err
 	}
+	slog.Info("configured trusted capability issuers", "count", len(cfg.TrustedIssuers))
 
 	registrationService, err := registration.NewService(
 		factsStore,
@@ -165,6 +163,13 @@ func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
 	}
 	addRoutes(mux, registerHandler, resolveHandler, adminHandlers, cfg.APIToken)
 	return api.WithRequestID(mux), nil
+}
+
+func newLocalTrustVerifier(cfg config.Local, revocationChecker trust.RevocationChecker) (*trust.Verifier, error) {
+	return trust.NewVerifier(
+		cfg.TrustedIssuers,
+		trust.WithRevocationChecker(revocationChecker),
+	)
 }
 
 type adminRouteHandlers struct {

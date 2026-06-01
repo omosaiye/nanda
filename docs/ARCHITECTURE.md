@@ -4,7 +4,7 @@ NANDA v0.1 is a local prototype with a compact signed L1 record, local L2 AgentF
 
 ## Components
 
-- `cmd/nanda-server`: loads runtime config, opens Postgres, optionally applies migrations, wires stores and services, and exposes HTTP routes.
+- `cmd/nanda-server`: loads runtime config including local trusted issuers, opens Postgres, optionally applies migrations, wires stores and services, and exposes HTTP routes.
 - `internal/agentaddr`: defines the 120-byte `AgentAddr120` payload and signed record format, agent ID normalization, hashes, encode/decode, and Ed25519 verification.
 - `internal/agentfacts`: defines and validates `AgentFacts`, endpoints, and v0 capability credential data.
 - `internal/facts`: stores AgentFacts on the filesystem and stores facts pointer mappings in Postgres.
@@ -29,7 +29,8 @@ Resolution accepts an agent ID and optional required capability. It loads the L1
 - Postgres is trusted local storage for the L1 index, facts pointer mapping, audit events, and revocation records.
 - Filesystem AgentFacts storage is local storage and is verified through L1 pointer and credential-set hashes during resolution.
 - The server signing key is the root of local L1 authenticity. Local mode may generate an ephemeral key; production mode requires `NANDA_PRIVATE_KEY_BASE64`.
-- The v0 trust verifier only trusts configured issuer public keys. The current server wiring uses an empty issuer allowlist, so capability-required resolution will fail closed unless trust configuration is added later.
+- The v0 trust verifier only trusts local configured issuer public keys from `NANDA_TRUST_ISSUERS_JSON` or `NANDA_TRUST_ISSUERS_FILE`. Capability-required resolution fails closed when no configured issuer matches the credential issuer.
+- Issuer trust configuration is local Ed25519 key pinning. It is not DID resolution, full W3C VC trust, or VC Status List processing.
 - Admin routes are protected only by the same optional bearer-token guardrail as registration and resolution.
 
 ## Key Invariants
@@ -50,5 +51,5 @@ Resolution accepts an agent ID and optional required capability. It loads the L1
 - No IPFS, Tor, OHTTP, Trillian, Envoy, Redis, NATS, Kubernetes, or UI.
 - No production RBAC or operator authorization model beyond a bearer token.
 - No HTTP endpoint currently mutates revocation status.
-- No issuer configuration is wired into `cmd/nanda-server` yet.
+- No issuer lifecycle management, key rotation workflow, or DID-backed trust chain.
 - Filesystem AgentFacts storage is intended for the local prototype.

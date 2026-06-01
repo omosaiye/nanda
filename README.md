@@ -14,6 +14,7 @@ The v0.1 local prototype supports:
 - Registration API at `POST /v1/agents/register`.
 - Resolver API at `POST /v1/resolve`.
 - Trust verifier v0 for local Ed25519 capability credentials.
+- Local trusted issuer configuration through `NANDA_TRUST_ISSUERS_JSON` or `NANDA_TRUST_ISSUERS_FILE`.
 - Revocation v0 through the revocation store and verifier hook.
 - Hash-chained audit events with append-only Postgres table protection.
 - Admin inspection API for agents, audit events, and revocation status.
@@ -83,6 +84,14 @@ curl -sS -X POST http://localhost:8080/v1/resolve \
   --data-binary @docs/examples/resolve-agent.json
 ```
 
+Resolve with a required capability:
+
+```sh
+curl -sS -X POST http://localhost:8080/v1/resolve \
+  -H 'Content-Type: application/json' \
+  --data-binary @docs/examples/resolve-agent-required-capability.json
+```
+
 Admin get agent:
 
 ```sh
@@ -113,6 +122,19 @@ If `NANDA_API_TOKEN` is set, add `-H 'Authorization: Bearer <token>'` to registr
 - Automatic migrations are disabled unless `NANDA_AUTO_MIGRATE=true`.
 
 This mode is a guardrail for local production-like testing, not a complete production deployment model.
+
+## Local Issuer Trust
+
+Capability-required resolution verifies v0 Ed25519 capability credentials against a local issuer allowlist. Configure exactly one of:
+
+```sh
+export NANDA_TRUST_ISSUERS_JSON='{"did:example:issuer":"<base64-ed25519-public-key>"}'
+export NANDA_TRUST_ISSUERS_FILE='docs/examples/trust-issuers.example.json'
+```
+
+If both variables are set, startup config validation fails. If neither contains the credential issuer, resolution requests with `requiredCapability` fail closed with `403 trust_denied`. Resolution without `requiredCapability` remains unverified-v0 and does not require issuer trust.
+
+This is local Ed25519 issuer trust only. It does not implement DID resolution, full W3C VC canonicalization, or VC Status Lists.
 
 ## Revocation Status
 
