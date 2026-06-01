@@ -145,13 +145,30 @@ curl -sS 'http://localhost:8080/v1/admin/audit/agent.example?limit=50&offset=0&e
   -H 'X-Request-ID: demo-admin-audit-agent'
 ```
 
+Set a credential as revoked:
+
+```sh
+curl -sS -X POST http://localhost:8080/v1/admin/revocation \
+  "${TOKEN_HEADER[@]}" \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-ID: demo-admin-revoke' \
+  --data '{
+    "issuer": "did:example:issuer",
+    "credentialId": "credential-1",
+    "status": "revoked",
+    "reason": "operator action"
+  }'
+```
+
 Get revocation status for a credential:
 
 ```sh
-curl -sS http://localhost:8080/v1/admin/revocation/issuer.example/credential-1 \
+curl -sS http://localhost:8080/v1/admin/revocation/did:example:issuer/credential-1 \
   "${TOKEN_HEADER[@]}" \
   -H 'X-Request-ID: demo-admin-revocation'
 ```
+
+When registered AgentFacts contain a signed capability credential with the same issuer and credential ID, capability-required resolution fails closed after that credential is marked revoked. The resolver returns `403 trust_denied` for requests that include `requiredCapability`.
 
 ## Demo Script
 

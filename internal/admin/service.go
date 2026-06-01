@@ -71,6 +71,21 @@ type RevocationStatusResponse struct {
 	UpdatedAt    *time.Time `json:"updatedAt,omitempty"`
 }
 
+type SetRevocationStatusRequest struct {
+	Issuer       string `json:"issuer"`
+	CredentialID string `json:"credentialId"`
+	Status       string `json:"status"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+type SetRevocationStatusResponse struct {
+	Issuer       string `json:"issuer"`
+	CredentialID string `json:"credentialId"`
+	Status       string `json:"status"`
+	Reason       string `json:"reason,omitempty"`
+	Updated      bool   `json:"updated"`
+}
+
 func NewService(indexStore index.LeanIndexStore, auditStore audit.Store, revocationStore revocation.Store) (*Service, error) {
 	if indexStore == nil {
 		return nil, ErrMissingIndexStore
@@ -197,4 +212,63 @@ func (s *Service) GetRevocationStatus(ctx context.Context, issuer string, creden
 		Found:        true,
 		UpdatedAt:    &updatedAt,
 	}, nil
+}
+
+func (s *Service) SetRevocationStatus(ctx context.Context, req SetRevocationStatusRequest) (SetRevocationStatusResponse, error) {
+	if req.Issuer == "" {
+		return SetRevocationStatusResponse{}, ValidationError{Field: "issuer", Err: errors.New("issuer is required")}
+	}
+	if req.CredentialID == "" {
+		return SetRevocationStatusResponse{}, ValidationError{Field: "credentialId", Err: errors.New("credential id is required")}
+	}
+	switch req.Status {
+	case revocation.StatusActive, revocation.StatusRevoked:
+	default:
+		return SetRevocationStatusResponse{}, ValidationError{Field: "status", Err: fmt.Errorf("status must be %q or %q", revocation.StatusActive, revocation.StatusRevoked)}
+	}
+
+	if err := s.revocationStore.SetStatus(ctx, req.Issuer, req.CredentialID, req.Status, req.Reason); err != nil {
+		if errors.Is(err, revocation.ErrInvalidInput) {
+			return SetRevocationStatusResponse{}, ValidationError{Err: err}
+		}
+		return SetRevocationStatusResponse{}, fmt.Errorf("set revocation status: %w", err)
+	}
+	if s.auditStore != nil {
+		if err := s.auditRevocationUpdated(ctx, req); err != nil {
+			return SetRevocationStatusResponse{}, err
+		}
+	}
+
+	return SetRevocationStatusResponse{
+		Issuer:       req.Issuer,
+		CredentialID: req.CredentialID,
+		Status:       req.Status,
+		Reason:       req.Reason,
+		Updated:      true,
+	}, nil
+}
+
+func (s *Service) auditRevocationUpdated(ctx context.Context, req SetRevocationStatusRequest) error {
+	payload, err := audit.Payload(struct {
+		Issuer       string `json:"issuer"`
+		CredentialID string `json:"credentialId"`
+		Status       string `json:"status"`
+		Reason       string `json:"reason,omitempty"`
+	}{
+		Issuer:       req.Issuer,
+		CredentialID: req.CredentialID,
+		Status:       req.Status,
+		Reason:       req.Reason,
+	})
+	if err != nil {
+		return fmt.Errorf("build revocation audit payload: %w", err)
+	}
+	if _, err := s.auditStore.Append(ctx, audit.EventInput{
+		EventType: audit.EventRevocationUpdated,
+		Decision:  audit.DecisionAllowed,
+		EventJSON: payload,
+	}); err != nil {
+		return fmt.Errorf("append revocation audit event: %w", err)
+	}
+	return nil
 }

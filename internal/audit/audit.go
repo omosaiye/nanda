@@ -14,10 +14,11 @@ import (
 )
 
 const (
-	EventAgentRegistered = "agent.registered"
-	EventResolveAllowed  = "resolve.allowed"
-	EventResolveDenied   = "resolve.denied"
-	EventTrustDenied     = "trust.denied"
+	EventAgentRegistered   = "agent.registered"
+	EventResolveAllowed    = "resolve.allowed"
+	EventResolveDenied     = "resolve.denied"
+	EventTrustDenied       = "trust.denied"
+	EventRevocationUpdated = "credential.revocation.updated"
 
 	DecisionAllowed = "allowed"
 	DecisionDenied  = "denied"
@@ -189,7 +190,7 @@ func validateInput(input EventInput) error {
 
 func supportedEventType(eventType string) bool {
 	switch eventType {
-	case EventAgentRegistered, EventResolveAllowed, EventResolveDenied, EventTrustDenied:
+	case EventAgentRegistered, EventResolveAllowed, EventResolveDenied, EventTrustDenied, EventRevocationUpdated:
 		return true
 	default:
 		return false

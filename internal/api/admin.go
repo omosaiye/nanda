@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -17,6 +18,7 @@ type AdminService interface {
 	ListAudit(ctx context.Context, query audit.Query) (audit.ListResult, error)
 	ListAuditByAgent(ctx context.Context, agentID string, query audit.Query) (audit.ListResult, error)
 	GetRevocationStatus(ctx context.Context, issuer string, credentialID string) (admin.RevocationStatusResponse, error)
+	SetRevocationStatus(ctx context.Context, req admin.SetRevocationStatusRequest) (admin.SetRevocationStatusResponse, error)
 }
 
 func AdminGetAgentHandler(service AdminService) http.Handler {
@@ -101,6 +103,29 @@ func AdminGetRevocationStatusHandler(service AdminService) http.Handler {
 	})
 }
 
+func AdminSetRevocationStatusHandler(service AdminService) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = EnsureRequestID(w, r)
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			WriteJSONError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", http.StatusText(http.StatusMethodNotAllowed))
+			return
+		}
+
+		var req admin.SetRevocationStatusRequest
+		if err := decodeJSONBody(r, &req); err != nil {
+			WriteJSONError(w, r, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		resp, err := service.SetRevocationStatus(r.Context(), req)
+		if err != nil {
+			writeAdminError(w, r, err)
+			return
+		}
+		writeJSON(w, r, resp)
+	})
+}
+
 func writeAdminError(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, admin.ErrValidation) {
 		WriteJSONError(w, r, http.StatusBadRequest, "admin_validation_failed", err.Error())
@@ -112,6 +137,18 @@ func writeAdminError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	slog.Error("admin request failed", "err", err, "request_id", RequestID(r))
 	WriteJSONError(w, r, http.StatusInternalServerError, "internal_error", http.StatusText(http.StatusInternalServerError))
+}
+
+func decodeJSONBody(r *http.Request, value any) error {
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return errors.New("request body must contain one JSON value")
+	}
+	return nil
 }
 
 func parseAuditQuery(r *http.Request) (audit.Query, error) {

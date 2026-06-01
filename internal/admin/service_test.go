@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -152,6 +153,112 @@ func TestGetRevocationStatusMissingReturnsActiveNotFound(t *testing.T) {
 	}
 }
 
+func TestSetRevocationStatusSuccess(t *testing.T) {
+	revocationStore := &fakeRevocationStore{}
+	service := newTestService(t, &fakeIndexStore{}, audit.NewMemoryStore(), revocationStore)
+
+	resp, err := service.SetRevocationStatus(context.Background(), SetRevocationStatusRequest{
+		Issuer:       "did:example:issuer",
+		CredentialID: "credential-1",
+		Status:       revocation.StatusRevoked,
+		Reason:       "operator action",
+	})
+	if err != nil {
+		t.Fatalf("SetRevocationStatus returned error: %v", err)
+	}
+	if !resp.Updated {
+		t.Fatal("updated = false, want true")
+	}
+	if resp.Issuer != "did:example:issuer" || resp.CredentialID != "credential-1" || resp.Status != revocation.StatusRevoked || resp.Reason != "operator action" {
+		t.Fatalf("response = %+v, want revoked response", resp)
+	}
+	if revocationStore.setIssuer != "did:example:issuer" || revocationStore.setCredentialID != "credential-1" || revocationStore.setStatus != revocation.StatusRevoked || revocationStore.setReason != "operator action" {
+		t.Fatalf("set status args = %q/%q/%q/%q", revocationStore.setIssuer, revocationStore.setCredentialID, revocationStore.setStatus, revocationStore.setReason)
+	}
+}
+
+func TestSetRevocationStatusValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		req  SetRevocationStatusRequest
+	}{
+		{
+			name: "invalid issuer",
+			req: SetRevocationStatusRequest{
+				CredentialID: "credential-1",
+				Status:       revocation.StatusRevoked,
+			},
+		},
+		{
+			name: "invalid credential id",
+			req: SetRevocationStatusRequest{
+				Issuer: "did:example:issuer",
+				Status: revocation.StatusRevoked,
+			},
+		},
+		{
+			name: "invalid status",
+			req: SetRevocationStatusRequest{
+				Issuer:       "did:example:issuer",
+				CredentialID: "credential-1",
+				Status:       "disabled",
+			},
+		},
+	}
+
+	service := newTestService(t, &fakeIndexStore{}, audit.NewMemoryStore(), revocation.NewMemoryStore())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := service.SetRevocationStatus(context.Background(), tt.req)
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("SetRevocationStatus error = %v, want ErrValidation", err)
+			}
+		})
+	}
+}
+
+func TestSetRevocationStatusWritesAuditEvent(t *testing.T) {
+	auditStore := audit.NewMemoryStore()
+	service := newTestService(t, &fakeIndexStore{}, auditStore, revocation.NewMemoryStore())
+
+	_, err := service.SetRevocationStatus(context.Background(), SetRevocationStatusRequest{
+		Issuer:       "did:example:issuer",
+		CredentialID: "credential-1",
+		Status:       revocation.StatusRevoked,
+		Reason:       "operator action",
+	})
+	if err != nil {
+		t.Fatalf("SetRevocationStatus returned error: %v", err)
+	}
+
+	events, err := auditStore.List(context.Background())
+	if err != nil {
+		t.Fatalf("list audit events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("event count = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.EventType != audit.EventRevocationUpdated {
+		t.Fatalf("event type = %q, want %q", event.EventType, audit.EventRevocationUpdated)
+	}
+	if event.Decision != audit.DecisionAllowed {
+		t.Fatalf("decision = %q, want %q", event.Decision, audit.DecisionAllowed)
+	}
+	var payload struct {
+		Issuer       string `json:"issuer"`
+		CredentialID string `json:"credentialId"`
+		Status       string `json:"status"`
+		Reason       string `json:"reason"`
+	}
+	if err := json.Unmarshal(event.EventJSON, &payload); err != nil {
+		t.Fatalf("unmarshal audit payload: %v", err)
+	}
+	if payload.Issuer != "did:example:issuer" || payload.CredentialID != "credential-1" || payload.Status != revocation.StatusRevoked || payload.Reason != "operator action" {
+		t.Fatalf("audit payload = %+v, want revocation update", payload)
+	}
+}
+
 func testAgentRecord(t *testing.T, agentID string) agentaddr.AgentAddr120 {
 	t.Helper()
 	_, privateKey, err := ed25519.GenerateKey(nil)
@@ -219,12 +326,21 @@ func (s *fakeIndexStore) History(_ context.Context, _ [16]byte) ([]index.Indexed
 }
 
 type fakeRevocationStore struct {
-	record revocation.Record
-	err    error
+	record          revocation.Record
+	err             error
+	setErr          error
+	setIssuer       string
+	setCredentialID string
+	setStatus       string
+	setReason       string
 }
 
-func (s *fakeRevocationStore) SetStatus(_ context.Context, _ string, _ string, _ string, _ string) error {
-	return nil
+func (s *fakeRevocationStore) SetStatus(_ context.Context, issuer string, credentialID string, status string, reason string) error {
+	s.setIssuer = issuer
+	s.setCredentialID = credentialID
+	s.setStatus = status
+	s.setReason = reason
+	return s.setErr
 }
 
 func (s *fakeRevocationStore) GetStatus(_ context.Context, _ string, _ string) (revocation.Record, error) {

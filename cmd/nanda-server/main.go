@@ -160,6 +160,7 @@ func newLocalHandler(cfg config.Local, db *sql.DB) (http.Handler, error) {
 		listAudit:           api.AdminListAuditHandler(adminService),
 		listAuditByAgent:    api.AdminListAuditByAgentHandler(adminService),
 		getRevocationStatus: api.AdminGetRevocationStatusHandler(adminService),
+		setRevocationStatus: api.AdminSetRevocationStatusHandler(adminService),
 	}
 	addRoutes(mux, registerHandler, resolveHandler, adminHandlers, cfg.APIToken)
 	return api.WithRequestID(mux), nil
@@ -177,6 +178,7 @@ type adminRouteHandlers struct {
 	listAudit           http.Handler
 	listAuditByAgent    http.Handler
 	getRevocationStatus http.Handler
+	setRevocationStatus http.Handler
 }
 
 func addRoutes(mux *http.ServeMux, registerHandler http.Handler, resolveHandler http.Handler, adminHandlers adminRouteHandlers, apiToken string) {
@@ -187,6 +189,7 @@ func addRoutes(mux *http.ServeMux, registerHandler http.Handler, resolveHandler 
 	mux.Handle("/v1/admin/agents/{agentId}", api.WithBearerAuth(adminHandlers.getAgent, apiToken))
 	mux.Handle("/v1/admin/audit", api.WithBearerAuth(adminHandlers.listAudit, apiToken))
 	mux.Handle("/v1/admin/audit/{agentId}", api.WithBearerAuth(adminHandlers.listAuditByAgent, apiToken))
+	mux.Handle("/v1/admin/revocation", api.WithBearerAuth(adminHandlers.setRevocationStatus, apiToken))
 	mux.Handle("/v1/admin/revocation/{issuer}/{credentialId}", api.WithBearerAuth(adminHandlers.getRevocationStatus, apiToken))
 }
 
