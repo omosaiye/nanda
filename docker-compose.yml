@@ -1,7 +1,6 @@
 services:
   postgres:
     image: postgres:16
-    container_name: nanda_postgres
     environment:
       POSTGRES_USER: nanda
       POSTGRES_PASSWORD: nanda

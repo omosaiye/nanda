@@ -62,6 +62,8 @@ git push origin v0.2-local-prototype
   - Start local Postgres with Docker Compose.
   - Run `make verify`.
   - Run `make run-local` and `scripts/demo-local.sh`.
+  - Confirm the demo registers and resolves both `agent.example` and `agent.beta`.
+  - Confirm both resolve responses include `endpoint` and `proofBundle`.
 - Run the local demo script against the release candidate:
 
   ```sh

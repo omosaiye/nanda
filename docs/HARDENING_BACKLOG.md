@@ -33,6 +33,8 @@ Known hardening tasks for NANDA v0:
 
 Completed:
 
+- Removed fixed Docker Compose container naming so clean clones and parallel directories can start local Postgres without name collisions.
+- Added two-agent demo readiness with checked-in `agent.example` and `agent.beta` registration and resolution examples.
 - Added reusable JSON error helpers for API handlers.
 - Added request IDs to local API responses and handler error logs.
 - Added local Makefile targets for test, integration test, local run, Docker, formatting, and verification.

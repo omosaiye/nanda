@@ -1,0 +1,22 @@
+{
+  "agentId": "agent.beta",
+  "ttlSeconds": 300,
+  "sequence": 1,
+  "facts": {
+    "schemaVersion": "nanda.agentfacts.v0",
+    "id": "agent.beta",
+    "controller": "did:example:beta-controller",
+    "validFrom": "2026-01-01T00:00:00Z",
+    "validUntil": "2030-01-01T00:00:00Z",
+    "capabilities": ["chat", "search"],
+    "endpoints": [
+      {
+        "id": "beta-primary",
+        "type": "static",
+        "url": "https://agent-beta.example/api",
+        "protocol": "https",
+        "ttlSeconds": 45
+      }
+    ]
+  }
+}
