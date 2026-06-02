@@ -1,6 +1,6 @@
 # NANDA Local Demo
 
-This demo runs the v0 server against local PostgreSQL and uses the checked-in JSON examples.
+This demo runs the v0 server against local PostgreSQL and uses the checked-in JSON examples. The helper script registers and resolves both `agent.example` and `agent.beta`, then shows admin inspection, audit, revocation status, and local `/metrics` output.
 
 ## Start PostgreSQL
 
@@ -97,6 +97,15 @@ curl -sS -X POST http://localhost:8080/v1/agents/register \
   --data-binary @docs/examples/register-agent.json
 ```
 
+Register the second checked-in example:
+
+```sh
+curl -sS -X POST http://localhost:8080/v1/agents/register \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-ID: demo-register-beta' \
+  --data-binary @docs/examples/register-agent-beta.json
+```
+
 ## Resolve an Agent
 
 ```sh
@@ -104,6 +113,15 @@ curl -sS -X POST http://localhost:8080/v1/resolve \
   -H 'Content-Type: application/json' \
   -H 'X-Request-ID: demo-resolve' \
   --data-binary @docs/examples/resolve-agent.json
+```
+
+Resolve the second checked-in example:
+
+```sh
+curl -sS -X POST http://localhost:8080/v1/resolve \
+  -H 'Content-Type: application/json' \
+  -H 'X-Request-ID: demo-resolve-beta' \
+  --data-binary @docs/examples/resolve-agent-beta.json
 ```
 
 Resolver responses include additive `cache` metadata with `ttlSeconds`, `expiresAt`, and `sourceSequence`. The cache TTL is capped by both the remaining L1 `AgentAddr120` TTL and the selected endpoint TTL. The L1 index rejects stale sequence overwrites, and same-sequence updates are idempotent only when the record bytes are identical.
@@ -193,6 +211,8 @@ With PostgreSQL and the server running:
 ```sh
 ./scripts/demo-local.sh
 ```
+
+The script prints sections for health, readiness, two registrations, two resolutions, admin inspection, audit listing, revocation status, and metrics. Resolve responses include `endpoint` and `proofBundle` fields so verification evidence is visible in the terminal.
 
 ## Tests
 

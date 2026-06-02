@@ -40,6 +40,20 @@ curl_get() {
   printf '%s\n' "$response" | pretty_print
 }
 
+curl_get_raw() {
+  url="$1"
+  request_id="$2"
+  if [ -n "$API_TOKEN" ]; then
+    curl -fsS "$url" \
+      -H "Authorization: Bearer $API_TOKEN" \
+      -H "X-Request-ID: $request_id"
+  else
+    curl -fsS "$url" \
+      -H "X-Request-ID: $request_id"
+  fi
+  printf '\n'
+}
+
 curl_post_json() {
   url="$1"
   request_id="$2"
@@ -66,16 +80,25 @@ section "Readiness"
 curl_get "$BASE_URL/readyz" "demo-ready"
 
 section "Register agent.example"
-curl_post_json "$BASE_URL/v1/agents/register" "demo-register" "docs/examples/register-agent.json"
+curl_post_json "$BASE_URL/v1/agents/register" "demo-register-agent-example" "docs/examples/register-agent.json"
 
 section "Resolve agent.example"
-curl_post_json "$BASE_URL/v1/resolve" "demo-resolve" "docs/examples/resolve-agent.json"
+curl_post_json "$BASE_URL/v1/resolve" "demo-resolve-agent-example" "docs/examples/resolve-agent.json"
 
-section "Admin agent inspection"
-curl_get "$BASE_URL/v1/admin/agents/agent.example" "demo-admin-agent"
+section "Register agent.beta"
+curl_post_json "$BASE_URL/v1/agents/register" "demo-register-agent-beta" "docs/examples/register-agent-beta.json"
+
+section "Resolve agent.beta"
+curl_post_json "$BASE_URL/v1/resolve" "demo-resolve-agent-beta" "docs/examples/resolve-agent-beta.json"
+
+section "Admin inspection"
+curl_get "$BASE_URL/v1/admin/agents/agent.example" "demo-admin-agent-example"
 
 section "Admin audit list"
 curl_get "$BASE_URL/v1/admin/audit?limit=10&offset=0" "demo-admin-audit"
 
-section "Admin revocation status"
+section "Revocation status"
 curl_get "$BASE_URL/v1/admin/revocation/issuer.example/credential-1" "demo-admin-revocation"
+
+section "Metrics"
+curl_get_raw "$BASE_URL/metrics" "demo-metrics"

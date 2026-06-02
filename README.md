@@ -49,7 +49,15 @@ In another terminal:
 scripts/demo-local.sh
 ```
 
-The demo script checks health and readiness, registers `docs/examples/register-agent.json`, resolves `docs/examples/resolve-agent.json`, calls admin inspection endpoints, and exits non-zero on failure.
+The demo script checks health and readiness, registers and resolves the `agent.example` and `agent.beta` examples, calls admin inspection endpoints, prints `/metrics`, and exits non-zero on failure.
+
+## Technical Challenge Notes
+
+The Level 1 flow is: index lookup -> signed `AgentAddr120` -> `AgentFacts` pointer -> `AgentFacts` metadata -> verified endpoint.
+
+The local demo registers and resolves two NANDA-native agents: `agent.example` and `agent.beta`. Tamper detection is handled through the Ed25519-signed `AgentAddr120`, `AgentFacts` pointer hash binding, `AgentFacts` schema validation, credential-set hash, and trust/revocation checks when a required capability is requested.
+
+AI assistance was used iteratively for scaffolding, test review, and hardening; changes were reviewed, tested, and committed milestone by milestone. This repository remains a local prototype and does not claim production readiness.
 
 ## Development Workflow
 
